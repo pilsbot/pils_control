@@ -26,7 +26,7 @@
 
 #include "rclcpp/time.hpp"
 
-#include "../../../acker_diff_controller/include/acker_diff_controller/rolling_mean_accumulator.hpp"
+#include "acker_diff_controller/rolling_mean_accumulator.hpp"
 
 namespace acker_diff_controller
 {
@@ -83,6 +83,6 @@ private:
   RollingMeanAccumulator angular_accumulator_;
 };
 
-}  // namespace diff_drive_controller
+}  // namespace acker_diff_controller
 
 #endif  // DIFF_DRIVE_CONTROLLER__ODOMETRY_HPP_

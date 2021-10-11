@@ -62,5 +62,5 @@ private:
   T sum_;
   bool buffer_filled_;
 };
-}  // namespace diff_drive_controller
+}  // namespace acker_diff_controller
 #endif  // DIFF_DRIVE_CONTROLLER__ROLLING_MEAN_ACCUMULATOR_HPP_

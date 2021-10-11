@@ -1,6 +1,6 @@
-.. _diff_drive_controller_userdoc:
+.. _acker_drive_controller_userdoc:
 
-diff_drive_controller
+acker_drive_controller
 =====================
 
 Controller for mobile robots with differential Drive in front axle that have a trailing back axle.

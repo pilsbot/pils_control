@@ -27,7 +27,7 @@
 #include "rclcpp/logging.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 
-#include "../../acker_diff_controller/include/acker_diff_controller/acker_diff_controller.hpp"
+#include "acker_diff_controller/acker_diff_controller.hpp"
 
 namespace
 {
@@ -155,8 +155,8 @@ controller_interface::return_type AckerDiffController::update()
 
   const auto current_time = node_->get_clock()->now();
 
-  std::shared_ptr<Twist> last_msg;
-  received_velocity_msg_ptr_.get(last_msg);
+  std::shared_ptr<AckermannStamped> last_msg;
+  received_command_msg_ptr_.get(last_msg);
 
   if (last_msg == nullptr)
   {
@@ -168,14 +168,15 @@ controller_interface::return_type AckerDiffController::update()
   // Brake if cmd_vel has timeout, override the stored command
   if (dt > cmd_vel_timeout_)
   {
-    last_msg->twist.linear.x = 0.0;
-    last_msg->twist.angular.z = 0.0;
+    last_msg->drive.speed = 0;
+    last_msg->drive.steering_angle_velocity = 0;
   }
 
   // linear_command and angular_command may be limited further by SpeedLimit,
   // without affecting the stored twist command
-  double linear_command = last_msg->twist.linear.x;
-  double angular_command = last_msg->twist.angular.z;
+  double linear_command = last_msg->drive.speed;
+  double angle_command = last_msg->drive.steering_angle;
+  double angular_command = last_msg->drive.steering_angle_velocity;
 
   // Apply (possibly new) multipliers:
   const auto wheels = wheel_params_;
@@ -247,31 +248,34 @@ controller_interface::return_type AckerDiffController::update()
   const auto update_dt = current_time - previous_update_timestamp_;
   previous_update_timestamp_ = current_time;
 
-  auto & last_command = previous_commands_.back().twist;
-  auto & second_to_last_command = previous_commands_.front().twist;
+  auto & last_command = previous_commands_.back().drive;
+  auto & second_to_last_command = previous_commands_.front().drive;
   limiter_linear_.limit(
-    linear_command, last_command.linear.x, second_to_last_command.linear.x, update_dt.seconds());
+    linear_command, last_command.speed, second_to_last_command.speed, update_dt.seconds());
   limiter_angular_.limit(
-    angular_command, last_command.angular.z, second_to_last_command.angular.z, update_dt.seconds());
-
+    angular_command, last_command.steering_angle_velocity, second_to_last_command.steering_angle_velocity, update_dt.seconds());
+  //todo: add steering angle as well
   previous_commands_.pop();
   previous_commands_.emplace(*last_msg);
 
   //    Publish limited velocity
-  if (publish_limited_velocity_ && realtime_limited_velocity_publisher_->trylock())
+  if (publish_limited_velocity_ && realtime_limited_command_publisher_->trylock())
   {
-    auto & limited_velocity_command = realtime_limited_velocity_publisher_->msg_;
+    auto & limited_velocity_command = realtime_limited_command_publisher_->msg_;
     limited_velocity_command.header.stamp = current_time;
-    limited_velocity_command.twist.linear.x = linear_command;
-    limited_velocity_command.twist.angular.z = angular_command;
-    realtime_limited_velocity_publisher_->unlockAndPublish();
+    limited_velocity_command.drive.speed = linear_command;
+    limited_velocity_command.drive.steering_angle_velocity = angular_command;
+    //todo: add steering angle as well
+    realtime_limited_command_publisher_->unlockAndPublish();
   }
 
+  // TODO: statemachine with differences and shit
   // Compute wheels velocities:
   const double velocity_left =
     (linear_command - angular_command * wheel_separation / 2.0) / left_wheel_radius;
   const double velocity_right =
     (linear_command + angular_command * wheel_separation / 2.0) / right_wheel_radius;
+  (void) angle_command;
 
   // Set wheels velocities:
   for (size_t index = 0; index < wheels.wheels_per_side; ++index)
@@ -391,14 +395,14 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
 
   if (publish_limited_velocity_)
   {
-    limited_velocity_publisher_ =
-      node_->create_publisher<Twist>(DEFAULT_COMMAND_OUT_TOPIC, rclcpp::SystemDefaultsQoS());
-    realtime_limited_velocity_publisher_ =
-      std::make_shared<realtime_tools::RealtimePublisher<Twist>>(limited_velocity_publisher_);
+    limited_command_publisher_ =
+      node_->create_publisher<AckermannStamped>(DEFAULT_COMMAND_OUT_TOPIC, rclcpp::SystemDefaultsQoS());
+    realtime_limited_command_publisher_ =
+      std::make_shared<realtime_tools::RealtimePublisher<AckermannStamped>>(limited_command_publisher_);
   }
 
-  const Twist empty_twist;
-  received_velocity_msg_ptr_.set(std::make_shared<Twist>(empty_twist));
+  const AckermannStamped empty_twist;
+  received_command_msg_ptr_.set(std::make_shared<AckermannStamped>(empty_twist));
 
   // Fill last two commands with default constructed commands
   previous_commands_.emplace(empty_twist);
@@ -407,9 +411,9 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
   // initialize command subscriber
   if (use_stamped_vel_)
   {
-    velocity_command_subscriber_ = node_->create_subscription<Twist>(
+    command_subscriber_ = node_->create_subscription<AckermannStamped>(
       DEFAULT_COMMAND_TOPIC, rclcpp::SystemDefaultsQoS(),
-      [this](const std::shared_ptr<Twist> msg) -> void {
+      [this](const std::shared_ptr<AckermannStamped> msg) -> void {
         if (!subscriber_is_active_)
         {
           RCLCPP_WARN(node_->get_logger(), "Can't accept new commands. subscriber is inactive");
@@ -419,18 +423,18 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
         {
           RCLCPP_WARN_ONCE(
             node_->get_logger(),
-            "Received TwistStamped with zero timestamp, setting it to current "
+            "Received AckermannStampedStamped with zero timestamp, setting it to current "
             "time, this message will only be shown once");
           msg->header.stamp = node_->get_clock()->now();
         }
-        received_velocity_msg_ptr_.set(std::move(msg));
+        received_command_msg_ptr_.set(std::move(msg));
       });
   }
   else
   {
-    velocity_command_unstamped_subscriber_ = node_->create_subscription<geometry_msgs::msg::Twist>(
+    command_unstamped_subscriber_ = node_->create_subscription<Ackermann>(
       DEFAULT_COMMAND_UNSTAMPED_TOPIC, rclcpp::SystemDefaultsQoS(),
-      [this](const std::shared_ptr<geometry_msgs::msg::Twist> msg) -> void {
+      [this](const std::shared_ptr<Ackermann> msg) -> void {
         if (!subscriber_is_active_)
         {
           RCLCPP_WARN(node_->get_logger(), "Can't accept new commands. subscriber is inactive");
@@ -438,9 +442,9 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
         }
 
         // Write fake header in the stored stamped command
-        std::shared_ptr<Twist> twist_stamped;
-        received_velocity_msg_ptr_.get(twist_stamped);
-        twist_stamped->twist = *msg;
+        std::shared_ptr<AckermannStamped> twist_stamped;
+        received_command_msg_ptr_.get(twist_stamped);
+        twist_stamped->drive = *msg;
         twist_stamped->header.stamp = node_->get_clock()->now();
       });
   }
@@ -526,7 +530,7 @@ CallbackReturn AckerDiffController::on_cleanup(const rclcpp_lifecycle::State &)
     return CallbackReturn::ERROR;
   }
 
-  received_velocity_msg_ptr_.set(std::make_shared<Twist>());
+  received_command_msg_ptr_.set(std::make_shared<AckermannStamped>());
   return CallbackReturn::SUCCESS;
 }
 
@@ -544,17 +548,17 @@ bool AckerDiffController::reset()
   odometry_.resetOdometry();
 
   // release the old queue
-  std::queue<Twist> empty;
+  std::queue<AckermannStamped> empty;
   std::swap(previous_commands_, empty);
 
   registered_left_wheel_handles_.clear();
   registered_right_wheel_handles_.clear();
 
   subscriber_is_active_ = false;
-  velocity_command_subscriber_.reset();
-  velocity_command_unstamped_subscriber_.reset();
+  command_subscriber_.reset();
+  command_unstamped_subscriber_.reset();
 
-  received_velocity_msg_ptr_.set(nullptr);
+  received_command_msg_ptr_.set(nullptr);
   is_halted = false;
   return true;
 }
@@ -624,7 +628,7 @@ CallbackReturn AckerDiffController::configure_side(
 
   return CallbackReturn::SUCCESS;
 }
-}  // namespace diff_drive_controller
+}  // namespace acker_drive_controller
 
 #include "class_loader/register_macro.hpp"
 

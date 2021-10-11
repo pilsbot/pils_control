@@ -100,6 +100,6 @@ private:
   double max_jerk_;
 };
 
-}  // namespace diff_drive_controller
+}  // namespace acker_diff_controller
 
 #endif  // DIFF_DRIVE_CONTROLLER__SPEED_LIMITER_HPP_

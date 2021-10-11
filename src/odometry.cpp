@@ -16,7 +16,7 @@
  * Author: Enrique Fernández
  */
 
-#include "../../acker_diff_controller/include/acker_diff_controller/odometry.hpp"
+#include "acker_diff_controller/odometry.hpp"
 
 namespace acker_diff_controller
 {
@@ -153,4 +153,4 @@ void Odometry::resetAccumulators()
   angular_accumulator_ = RollingMeanAccumulator(velocity_rolling_window_size_);
 }
 
-}  // namespace diff_drive_controller
+}  // namespace acker_drive_controller

@@ -16,7 +16,7 @@
  * Author: Enrique Fernández
  */
 
-#include "../../acker_diff_controller/include/acker_diff_controller/speed_limiter.hpp"
+#include "acker_diff_controller/speed_limiter.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -138,4 +138,4 @@ double SpeedLimiter::limit_jerk(double & v, double v0, double v1, double dt)
   return tmp != 0.0 ? v / tmp : 1.0;
 }
 
-}  // namespace diff_drive_controller
+}  // namespace acker_drive_controller

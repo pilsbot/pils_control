@@ -38,10 +38,9 @@
 #include "tf2_msgs/msg/tf_message.hpp"
 #include "ackermann_msgs/msg/ackermann_drive_stamped.hpp"
 
-#include "../../../acker_diff_controller/include/acker_diff_controller/odometry.hpp"
-#include "../../../acker_diff_controller/include/acker_diff_controller/speed_limiter.hpp"
-#include "../../../acker_diff_controller/include/acker_diff_controller/visibility_control.h"
-#include "../acker_diff_controller/odometry.hpp"
+#include "acker_diff_controller/odometry.hpp"
+#include "acker_diff_controller/speed_limiter.hpp"
+#include "acker_diff_controller/visibility_control.h"
 
 namespace acker_diff_controller
 {
@@ -49,7 +48,6 @@ using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface
 
 class AckerDiffController : public controller_interface::ControllerInterface
 {
-  //using Twist = geometry_msgs::msg::TwistStamped;
 	using AckermannStamped = ackermann_msgs::msg::AckermannDriveStamped;
 	using Ackermann = ackermann_msgs::msg::AckermannDrive;
 
@@ -142,7 +140,7 @@ protected:
   rclcpp::Subscription<AckermannStamped>::SharedPtr command_subscriber_ = nullptr;
   rclcpp::Subscription<Ackermann>::SharedPtr command_unstamped_subscriber_ = nullptr;
 
-  realtime_tools::RealtimeBox<std::shared_ptr<AckermannStamped>> received_velocity_msg_ptr_{nullptr};
+  realtime_tools::RealtimeBox<std::shared_ptr<AckermannStamped>> received_command_msg_ptr_{nullptr};
 
   std::queue<AckermannStamped> previous_commands_;  // last two commands
 
@@ -163,4 +161,4 @@ protected:
   bool reset();
   void halt();
 };
-}  // namespace diff_drive_controller
+}  // namespace acker_diff_controller
