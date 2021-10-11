@@ -1,7 +1,0 @@
-<library path="pilsbot_drive_controller">
-  <class name="pilsbot_drive_controller/PBDriveController" type="pilsbot_drive_controller::PBDriveController" base_class_type="controller_interface::ControllerInterface">
-  <description>
-    The differential drive controller transforms linear velocity  and angle messages into signals for each wheel(s) for a differential drive robot.
-  </description>
-  </class>
-</library>

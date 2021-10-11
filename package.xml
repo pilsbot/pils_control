@@ -1,9 +1,10 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>pilsbot_drive_controller</name>
-  <version>0.1.0</version>
-  <description>Pilsbot diff drive with steering angle and extra steps</description>
-  <maintainer email="accounts@pascalpieper.de">Pascal Pieper</maintainer>
+  <name>acker_diff_controller</name>
+  <version>0.5.0</version>
+  <description>Controller for a differential drive mobile basew itch back axle</description>
+  <maintainer email="bence.magyar.robotics@gmail.com">Bence Magyar</maintainer>
+  <maintainer email="jordan.palacios@pal-robotics.com">Jordan Palacios</maintainer>
 
   <license>Apache License 2.0</license>
 
@@ -19,9 +20,13 @@
   <depend>tf2</depend>
   <depend>tf2_msgs</depend>
 
-  <build_depend>pluginlib</build_depend>
+  <depend>ackermann_msgs</depend><build_depend>pluginlib</build_depend>
+
+  <test_depend>ament_cmake_gmock</test_depend>
+  <test_depend>controller_manager</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
   </export>
+  
 </package>

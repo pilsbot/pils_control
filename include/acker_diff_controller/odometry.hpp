@@ -19,17 +19,17 @@
  * Author: Paul Mathieu
  */
 
-#ifndef PILS_DRIVE_CONTROLLER__ODOMETRY_HPP_
-#define PILS_DRIVE_CONTROLLER__ODOMETRY_HPP_
+#ifndef DIFF_DRIVE_CONTROLLER__ODOMETRY_HPP_
+#define DIFF_DRIVE_CONTROLLER__ODOMETRY_HPP_
 
 #include <cmath>
 
-#include "pils_drive_controller/rolling_mean_accumulator.hpp"
 #include "rclcpp/time.hpp"
 
-namespace pils_drive_controller
-{
+#include "../../../acker_diff_controller/include/acker_diff_controller/rolling_mean_accumulator.hpp"
 
+namespace acker_diff_controller
+{
 class Odometry
 {
 public:
@@ -40,33 +40,17 @@ public:
   void updateOpenLoop(double linear, double angular, const rclcpp::Time & time);
   void resetOdometry();
 
-  double getX() const
-  {
-    return x_;
-  }
-  double getY() const
-  {
-    return y_;
-  }
-  double getHeading() const
-  {
-    return heading_;
-  }
-  double getLinear() const
-  {
-    return linear_;
-  }
-  double getAngular() const
-  {
-    return angular_;
-  }
+  double getX() const { return x_; }
+  double getY() const { return y_; }
+  double getHeading() const { return heading_; }
+  double getLinear() const { return linear_; }
+  double getAngular() const { return angular_; }
 
   void setWheelParams(double wheel_separation, double left_wheel_radius, double right_wheel_radius);
   void setVelocityRollingWindowSize(size_t velocity_rolling_window_size);
 
 private:
-  using RollingMeanAccumulator =
-    pils_drive_controller::RollingMeanAccumulator<double>;
+  using RollingMeanAccumulator = acker_diff_controller::RollingMeanAccumulator<double>;
 
   void integrateRungeKutta2(double linear, double angular);
   void integrateExact(double linear, double angular);
@@ -99,6 +83,6 @@ private:
   RollingMeanAccumulator angular_accumulator_;
 };
 
-}  // namespace pils_drive_controller
+}  // namespace diff_drive_controller
 
-#endif  // PILS_DRIVE_CONTROLLER__ODOMETRY_HPP_
+#endif  // DIFF_DRIVE_CONTROLLER__ODOMETRY_HPP_

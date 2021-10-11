@@ -16,9 +16,9 @@
  * Author: Enrique Fernández
  */
 
-#include "pils_drive_controller/odometry.hpp"
+#include "../../acker_diff_controller/include/acker_diff_controller/odometry.hpp"
 
-namespace pils_drive_controller
+namespace acker_diff_controller
 {
 Odometry::Odometry(size_t velocity_rolling_window_size)
 : timestamp_(0.0),
@@ -49,8 +49,9 @@ bool Odometry::update(double left_pos, double right_pos, const rclcpp::Time & ti
 {
   // We cannot estimate the speed with very small time intervals:
   const double dt = time.seconds() - timestamp_.seconds();
-  if (dt < 0.0001) {
-    return false;    // Interval too small to integrate with
+  if (dt < 0.0001)
+  {
+    return false;  // Interval too small to integrate with
   }
 
   // Get current wheel joint positions:
@@ -105,8 +106,7 @@ void Odometry::resetOdometry()
 }
 
 void Odometry::setWheelParams(
-  double wheel_separation, double left_wheel_radius,
-  double right_wheel_radius)
+  double wheel_separation, double left_wheel_radius, double right_wheel_radius)
 {
   wheel_separation_ = wheel_separation;
   left_wheel_radius_ = left_wheel_radius;
@@ -132,9 +132,12 @@ void Odometry::integrateRungeKutta2(double linear, double angular)
 
 void Odometry::integrateExact(double linear, double angular)
 {
-  if (fabs(angular) < 1e-6) {
+  if (fabs(angular) < 1e-6)
+  {
     integrateRungeKutta2(linear, angular);
-  } else {
+  }
+  else
+  {
     /// Exact integration (should solve problems when angular is zero):
     const double heading_old = heading_;
     const double r = linear / angular;
@@ -150,4 +153,4 @@ void Odometry::resetAccumulators()
   angular_accumulator_ = RollingMeanAccumulator(velocity_rolling_window_size_);
 }
 
-}  // namespace pils_drive_controller
+}  // namespace diff_drive_controller

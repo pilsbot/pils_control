@@ -16,28 +16,26 @@
  * Author: Víctor López
  */
 
-#ifndef PILS_DRIVE_CONTROLLER__ROLLING_MEAN_ACCUMULATOR_HPP_
-#define PILS_DRIVE_CONTROLLER__ROLLING_MEAN_ACCUMULATOR_HPP_
+#ifndef DIFF_DRIVE_CONTROLLER__ROLLING_MEAN_ACCUMULATOR_HPP_
+#define DIFF_DRIVE_CONTROLLER__ROLLING_MEAN_ACCUMULATOR_HPP_
 
 #include <cassert>
 #include <vector>
 
-namespace pils_drive_controller
+namespace acker_diff_controller
 {
-
 /**
  * \brief Simplification of boost::accumulators::accumulator_set<double,
  *  bacc::stats<bacc::tag::rolling_mean>> to avoid dragging boost dependencies
  *
  * Computes the mean of the last accumulated elements
  */
-template<typename T>
+template <typename T>
 class RollingMeanAccumulator
 {
 public:
   explicit RollingMeanAccumulator(size_t rolling_window_size)
-  : buffer_(rolling_window_size, 0.0), next_insert_(0),
-    sum_(0.0), buffer_filled_(false)
+  : buffer_(rolling_window_size, 0.0), next_insert_(0), sum_(0.0), buffer_filled_(false)
   {
   }
 
@@ -64,5 +62,5 @@ private:
   T sum_;
   bool buffer_filled_;
 };
-}  // namespace pils_drive_controller
-#endif  // PILS_DRIVE_CONTROLLER__ROLLING_MEAN_ACCUMULATOR_HPP_
+}  // namespace diff_drive_controller
+#endif  // DIFF_DRIVE_CONTROLLER__ROLLING_MEAN_ACCUMULATOR_HPP_
