@@ -31,6 +31,7 @@ add_library(acker_diff_controller SHARED
 
 target_include_directories(acker_diff_controller PRIVATE include)
 ament_target_dependencies(acker_diff_controller
+  ackermann_msgs
   builtin_interfaces
   controller_interface
   geometry_msgs
@@ -73,6 +74,7 @@ if(False) #BUILD_TESTING)
   )
 
   ament_target_dependencies(test_acker_diff_controller
+    ackermann_msgs
     geometry_msgs
     hardware_interface
     nav_msgs
@@ -104,6 +106,7 @@ if(False) #BUILD_TESTING)
 endif()
 
 ament_export_dependencies(
+  ackermann_msgs
   controller_interface
   geometry_msgs
   hardware_interface
