@@ -91,16 +91,24 @@ protected:
     std::reference_wrapper<const hardware_interface::LoanedStateInterface> position;
     std::reference_wrapper<hardware_interface::LoanedCommandInterface> velocity;
   };
+  typedef std::reference_wrapper<const hardware_interface::LoanedStateInterface> SteeringHandle;
+
 
   CallbackReturn configure_side(
     const std::string & side, const std::vector<std::string> & wheel_names,
     std::vector<WheelHandle> & registered_handles);
+  CallbackReturn configure_steering_angle(std::string & name,
+      std::vector<SteeringHandle>& handle);
 
   std::vector<std::string> left_wheel_names_;
   std::vector<std::string> right_wheel_names_;
+  std::string steering_axle_name_;
 
   std::vector<WheelHandle> registered_left_wheel_handles_;
   std::vector<WheelHandle> registered_right_wheel_handles_;
+  // FIXME lol this is a one-element vector because I can't comprehend reference wrappers
+  std::vector<SteeringHandle> registered_steering_axle_handle_;
+
 
   struct WheelParams
   {

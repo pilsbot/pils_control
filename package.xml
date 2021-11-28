@@ -1,10 +1,9 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>acker_diff_controller</name>
-  <version>0.5.0</version>
-  <description>Controller for a differential drive mobile basew itch back axle</description>
-  <maintainer email="bence.magyar.robotics@gmail.com">Bence Magyar</maintainer>
-  <maintainer email="jordan.palacios@pal-robotics.com">Jordan Palacios</maintainer>
+  <version>0.1.0</version>
+  <description>Controller for a differential drive mobile base with back axle</description>
+  <maintainer email="info@pascalpieper.de">Pascal Pieper</maintainer>
 
   <license>Apache License 2.0</license>
 

@@ -63,6 +63,7 @@ controller_interface::return_type AckerDiffController::init(const std::string & 
     // with the lifecycle node being initialized, we can declare parameters
     auto_declare<std::vector<std::string>>("left_wheel_names", std::vector<std::string>());
     auto_declare<std::vector<std::string>>("right_wheel_names", std::vector<std::string>());
+    auto_declare<std::string>("steering_axle_name", std::string());
 
     auto_declare<double>("wheel_separation", wheel_params_.separation);
     auto_declare<int>("wheels_per_side", wheel_params_.wheels_per_side);
@@ -92,6 +93,10 @@ controller_interface::return_type AckerDiffController::init(const std::string & 
     auto_declare<double>("linear.x.min_acceleration", NAN);
     auto_declare<double>("linear.x.max_jerk", NAN);
     auto_declare<double>("linear.x.min_jerk", NAN);
+
+    //TODO: actually conform to these limits
+    auto_declare<double>("angle.z.max_angle", NAN);
+    auto_declare<double>("angle.z.min_angle", NAN);
 
     auto_declare<bool>("angular.z.has_velocity_limits", false);
     auto_declare<bool>("angular.z.has_acceleration_limits", false);
@@ -123,6 +128,9 @@ InterfaceConfiguration AckerDiffController::command_interface_configuration() co
   {
     conf_names.push_back(joint_name + "/" + HW_IF_VELOCITY);
   }
+
+  // todo: is this the "output" interface?
+
   return {interface_configuration_type::INDIVIDUAL, conf_names};
 }
 
@@ -137,12 +145,19 @@ InterfaceConfiguration AckerDiffController::state_interface_configuration() cons
   {
     conf_names.push_back(joint_name + "/" + HW_IF_POSITION);
   }
+
+  conf_names.push_back(steering_axle_name_ + "/" + HW_IF_POSITION);
+
   return {interface_configuration_type::INDIVIDUAL, conf_names};
 }
 
 controller_interface::return_type AckerDiffController::update()
 {
   auto logger = node_->get_logger();
+  RCLCPP_WARN_ONCE(
+    logger,
+    "update function called"
+  );
   if (get_current_state().id() == State::PRIMARY_STATE_INACTIVE)
   {
     if (!is_halted)
@@ -181,69 +196,14 @@ controller_interface::return_type AckerDiffController::update()
   // Apply (possibly new) multipliers:
   const auto wheels = wheel_params_;
   const double wheel_separation = wheels.separation_multiplier * wheels.separation;
+  if(std::isnan(wheel_separation))
+    RCLCPP_ERROR(logger,"Wheel_separation is NaN!");
   const double left_wheel_radius = wheels.left_radius_multiplier * wheels.radius;
+  if(std::isnan(left_wheel_radius))
+    RCLCPP_ERROR(logger,"left_wheel_radius is NaN!");
   const double right_wheel_radius = wheels.right_radius_multiplier * wheels.radius;
-
-  if (odom_params_.open_loop)
-  {
-    odometry_.updateOpenLoop(linear_command, angular_command, current_time);
-  }
-  else
-  {
-    double left_position_mean = 0.0;
-    double right_position_mean = 0.0;
-    for (size_t index = 0; index < wheels.wheels_per_side; ++index)
-    {
-      const double left_position = registered_left_wheel_handles_[index].position.get().get_value();
-      const double right_position =
-        registered_right_wheel_handles_[index].position.get().get_value();
-
-      if (std::isnan(left_position) || std::isnan(right_position))
-      {
-        RCLCPP_ERROR(
-          logger, "Either the left or right wheel position is invalid for index [%zu]", index);
-        return controller_interface::return_type::ERROR;
-      }
-
-      left_position_mean += left_position;
-      right_position_mean += right_position;
-    }
-    left_position_mean /= wheels.wheels_per_side;
-    right_position_mean /= wheels.wheels_per_side;
-
-    odometry_.update(left_position_mean, right_position_mean, current_time);
-  }
-
-  tf2::Quaternion orientation;
-  orientation.setRPY(0.0, 0.0, odometry_.getHeading());
-
-  if (realtime_odometry_publisher_->trylock())
-  {
-    auto & odometry_message = realtime_odometry_publisher_->msg_;
-    odometry_message.header.stamp = current_time;
-    odometry_message.pose.pose.position.x = odometry_.getX();
-    odometry_message.pose.pose.position.y = odometry_.getY();
-    odometry_message.pose.pose.orientation.x = orientation.x();
-    odometry_message.pose.pose.orientation.y = orientation.y();
-    odometry_message.pose.pose.orientation.z = orientation.z();
-    odometry_message.pose.pose.orientation.w = orientation.w();
-    odometry_message.twist.twist.linear.x = odometry_.getLinear();
-    odometry_message.twist.twist.angular.z = odometry_.getAngular();
-    realtime_odometry_publisher_->unlockAndPublish();
-  }
-
-  if (odom_params_.enable_odom_tf && realtime_odometry_transform_publisher_->trylock())
-  {
-    auto & transform = realtime_odometry_transform_publisher_->msg_.transforms.front();
-    transform.header.stamp = current_time;
-    transform.transform.translation.x = odometry_.getX();
-    transform.transform.translation.y = odometry_.getY();
-    transform.transform.rotation.x = orientation.x();
-    transform.transform.rotation.y = orientation.y();
-    transform.transform.rotation.z = orientation.z();
-    transform.transform.rotation.w = orientation.w();
-    realtime_odometry_transform_publisher_->unlockAndPublish();
-  }
+  if(std::isnan(right_wheel_radius))
+    RCLCPP_ERROR(logger,"right_wheel_radius is NaN!");
 
   const auto update_dt = current_time - previous_update_timestamp_;
   previous_update_timestamp_ = current_time;
@@ -254,7 +214,7 @@ controller_interface::return_type AckerDiffController::update()
     linear_command, last_command.speed, second_to_last_command.speed, update_dt.seconds());
   limiter_angular_.limit(
     angular_command, last_command.steering_angle_velocity, second_to_last_command.steering_angle_velocity, update_dt.seconds());
-  //todo: add steering angle as well
+  //todo: add steering angle limit as well
   previous_commands_.pop();
   previous_commands_.emplace(*last_msg);
 
@@ -270,16 +230,41 @@ controller_interface::return_type AckerDiffController::update()
   }
 
   // TODO: statemachine with differences and shit
+  const double current_steering_angle = registered_steering_axle_handle_[0].get().get_value();
+  if (std::isnan(current_steering_angle)) {
+    RCLCPP_ERROR(
+      logger, "Could not get current steering angle!");
+    return controller_interface::return_type::ERROR;
+  }
+
+  RCLCPP_WARN_ONCE(
+    logger,
+    "From current steering angle " + std::to_string(current_steering_angle) +
+    "\ncommands:" +
+    "\n\tlinear:  " + std::to_string(linear_command) +
+    "\n\tangle:   " + std::to_string(angle_command) +
+    "\n\tangular: " + std::to_string(angular_command)
+  );
+
   // Compute wheels velocities:
+  (void) angle_command;
   const double velocity_left =
     (linear_command - angular_command * wheel_separation / 2.0) / left_wheel_radius;
+  RCLCPP_INFO_ONCE(logger,
+      "%lf = (%lf - %lf * %lf / 2.0) / %lf",
+      velocity_left, linear_command, angular_command, wheel_separation, left_wheel_radius);
   const double velocity_right =
     (linear_command + angular_command * wheel_separation / 2.0) / right_wheel_radius;
-  (void) angle_command;
 
   // Set wheels velocities:
   for (size_t index = 0; index < wheels.wheels_per_side; ++index)
   {
+    RCLCPP_WARN_ONCE(
+      logger,
+        "setting velocity: \n" +
+        std::to_string(velocity_left) + "\n" +
+        std::to_string(velocity_right)
+    );
     registered_left_wheel_handles_[index].velocity.get().set_value(velocity_left);
     registered_right_wheel_handles_[index].velocity.get().set_value(velocity_right);
   }
@@ -290,10 +275,23 @@ controller_interface::return_type AckerDiffController::update()
 CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &)
 {
   auto logger = node_->get_logger();
+  RCLCPP_WARN(
+    logger,
+    "on_configure called"
+  );
 
   // update parameters
   left_wheel_names_ = node_->get_parameter("left_wheel_names").as_string_array();
   right_wheel_names_ = node_->get_parameter("right_wheel_names").as_string_array();
+  steering_axle_name_ = node_->get_parameter("steering_axle_name").as_string();
+
+  RCLCPP_WARN_ONCE(
+    logger,
+    "Wheel names: \n" +
+    left_wheel_names_[0] + "\n" +
+    right_wheel_names_[0] + "\nSteering axle name:\n" +
+    steering_axle_name_
+  );
 
   if (left_wheel_names_.size() != right_wheel_names_.size())
   {
@@ -303,13 +301,25 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
     return CallbackReturn::ERROR;
   }
 
-  if (left_wheel_names_.empty())
+  if (left_wheel_names_.empty() || right_wheel_names_.empty())
   {
     RCLCPP_ERROR(logger, "Wheel names parameters are empty!");
     return CallbackReturn::ERROR;
   }
 
+  if( steering_axle_name_.empty()) {
+    RCLCPP_ERROR(
+      logger, "Steering axle is not configured!");
+    return CallbackReturn::ERROR;
+  }
+
+
   wheel_params_.separation = node_->get_parameter("wheel_separation").as_double();
+  if(std::isnan(wheel_params_.separation) || wheel_params_.separation == 0) {
+    RCLCPP_ERROR(logger,
+        "Wheel separation '%lf' is unplausible!", wheel_params_.separation);
+    return CallbackReturn::ERROR;
+  }
   wheel_params_.wheels_per_side =
     static_cast<size_t>(node_->get_parameter("wheels_per_side").as_int());
   wheel_params_.radius = node_->get_parameter("wheel_radius").as_double();
@@ -423,7 +433,7 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
         {
           RCLCPP_WARN_ONCE(
             node_->get_logger(),
-            "Received AckermannStampedStamped with zero timestamp, setting it to current "
+            "Received AckermannStamped with zero timestamp, setting it to current "
             "time, this message will only be shown once");
           msg->header.stamp = node_->get_clock()->now();
         }
@@ -442,10 +452,10 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
         }
 
         // Write fake header in the stored stamped command
-        std::shared_ptr<AckermannStamped> twist_stamped;
-        received_command_msg_ptr_.get(twist_stamped);
-        twist_stamped->drive = *msg;
-        twist_stamped->header.stamp = node_->get_clock()->now();
+        std::shared_ptr<AckermannStamped> command_stamped;
+        received_command_msg_ptr_.get(command_stamped);
+        command_stamped->drive = *msg;
+        command_stamped->header.stamp = node_->get_clock()->now();
       });
   }
 
@@ -493,12 +503,20 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
 
 CallbackReturn AckerDiffController::on_activate(const rclcpp_lifecycle::State &)
 {
+  RCLCPP_INFO(
+    node_->get_logger(),
+    "on_activate called"
+  );
+
   const auto left_result =
     configure_side("left", left_wheel_names_, registered_left_wheel_handles_);
   const auto right_result =
     configure_side("right", right_wheel_names_, registered_right_wheel_handles_);
+  const auto steering_angle_result =
+    configure_steering_angle(steering_axle_name_, registered_steering_axle_handle_);
 
-  if (left_result == CallbackReturn::ERROR || right_result == CallbackReturn::ERROR)
+  if (left_result == CallbackReturn::ERROR || right_result == CallbackReturn::ERROR
+      || steering_angle_result == CallbackReturn::ERROR)
   {
     return CallbackReturn::ERROR;
   }
@@ -507,6 +525,13 @@ CallbackReturn AckerDiffController::on_activate(const rclcpp_lifecycle::State &)
   {
     RCLCPP_ERROR(
       node_->get_logger(), "Either left wheel interfaces, right wheel interfaces are non existent");
+    return CallbackReturn::ERROR;
+  }
+
+  if (registered_steering_axle_handle_.empty())
+  {
+    RCLCPP_ERROR(
+      node_->get_logger(), "steering axle interface ", steering_axle_name_," is non existent");
     return CallbackReturn::ERROR;
   }
 
@@ -553,6 +578,7 @@ bool AckerDiffController::reset()
 
   registered_left_wheel_handles_.clear();
   registered_right_wheel_handles_.clear();
+  registered_steering_axle_handle_.clear();
 
   subscriber_is_active_ = false;
   command_subscriber_.reset();
@@ -628,7 +654,37 @@ CallbackReturn AckerDiffController::configure_side(
 
   return CallbackReturn::SUCCESS;
 }
+
+CallbackReturn AckerDiffController::configure_steering_angle(std::string & name,
+    std::vector<SteeringHandle>& handle) {
+  auto logger = node_->get_logger();
+  if (name.empty())
+  {
+    RCLCPP_ERROR(logger, "No steering joint name specified");
+    return CallbackReturn::ERROR;
+  }
+
+  const auto state_handle = std::find_if(
+    state_interfaces_.cbegin(), state_interfaces_.cend(), [&name](const auto & interface) {
+      return interface.get_name() == name &&
+             interface.get_interface_name() == HW_IF_POSITION;
+    });
+
+  if (state_handle == state_interfaces_.cend())
+  {
+    RCLCPP_ERROR(logger, "Unable to obtain joint state handle for %s", name.c_str());
+    return CallbackReturn::ERROR;
+  }
+
+
+  handle.emplace_back(std::ref(*state_handle));
+
+  return CallbackReturn::SUCCESS;
+}
+
 }  // namespace acker_drive_controller
+
+
 
 #include "class_loader/register_macro.hpp"
 
