@@ -155,6 +155,7 @@ protected:
 
   // speed limiters
   SpeedLimiter limiter_linear_;
+  SpeedLimiter limiter_angle_;
   SpeedLimiter limiter_angular_;
 
   bool publish_limited_velocity_ = false;

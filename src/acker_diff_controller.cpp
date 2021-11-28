@@ -205,9 +205,9 @@ controller_interface::return_type AckerDiffController::update()
   auto & second_to_last_command = previous_commands_.front().drive;
   limiter_linear_.limit(
     linear_command, last_command.speed, second_to_last_command.speed, update_dt.seconds());
+  limiter_angle_.limit_velocity(angle_command); // actually limits position here, lol
   limiter_angular_.limit(
     angular_command, last_command.steering_angle_velocity, second_to_last_command.steering_angle_velocity, update_dt.seconds());
-  //todo: add steering angle limit as well
   previous_commands_.pop();
   previous_commands_.emplace(*last_msg);
   angular_command = std::abs(angular_command);  //angular is considered in the direction of steering error
@@ -218,8 +218,8 @@ controller_interface::return_type AckerDiffController::update()
     auto & limited_velocity_command = realtime_limited_command_publisher_->msg_;
     limited_velocity_command.header.stamp = current_time;
     limited_velocity_command.drive.speed = linear_command;
+    limited_velocity_command.drive.steering_angle = angle_command;
     limited_velocity_command.drive.steering_angle_velocity = angular_command;
-    //todo: add steering angle as well
     realtime_limited_command_publisher_->unlockAndPublish();
   }
 
@@ -230,15 +230,6 @@ controller_interface::return_type AckerDiffController::update()
       logger, "Could not get current steering angle!");
     return controller_interface::return_type::ERROR;
   }
-
-  RCLCPP_DEBUG(
-    logger,
-    "From current steering angle " + std::to_string(current_steering_angle) +
-    "\ncommands:" +
-    "\n\tlinear:  " + std::to_string(linear_command) +
-    "\n\tangle:   " + std::to_string(angle_command) +
-    "\n\tangular: " + std::to_string(angular_command)
-  );
 
   const double max_angle_error = M_PI_4;    // TODO: Make this configurable
   double angle_error = current_steering_angle - angle_command;
@@ -267,12 +258,10 @@ controller_interface::return_type AckerDiffController::update()
 
   //TODO: magic value where turning angle is so small that different speeds are not needed
   const double min_abs_turning_angle_for_ackermann = 0.05;
+  // also prevents div/0
   if(std::abs(angle_command) > min_abs_turning_angle_for_ackermann) {
     auto abs_alpha = M_PI_2 - std::abs(angle_command);
     auto turning_radius = wheel_base_distance / cos(abs_alpha);
-
-    //if(linear_command < 0)
-    //  turning_radius *= -1;
 
     // is wheel_separation measured from turning center or absolute?
     linear_part_left = (turning_radius + wheel_separation/2.0) * atan(linear_command / turning_radius);
@@ -280,9 +269,6 @@ controller_interface::return_type AckerDiffController::update()
 
     if(angle_command < 0)
       std::swap(linear_part_left, linear_part_right);
-    //if(linear_command < 0)
-    //  std::swap(linear_part_left, linear_part_right);
-
 
     RCLCPP_DEBUG(logger,
         "\n\tlinear_part_left : %lf = (%lf + %lf/2) * atan(%lf / %lf)"
@@ -418,6 +404,23 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
   catch (const std::runtime_error & e)
   {
     RCLCPP_ERROR(node_->get_logger(), "Error configuring linear speed limiter: %s", e.what());
+  }
+
+  try
+  {
+    auto_declare<bool>("angle.z.has_position_limits", false);
+    auto_declare<double>("angle.z.max_angle", NAN);
+    auto_declare<double>("angle.z.min_angle", NAN);
+
+    limiter_angle_ = SpeedLimiter(
+      node_->get_parameter("angle.z.has_position_limits").as_bool(),
+      false, false,
+      node_->get_parameter("angle.z.min_angle").as_double(),
+      node_->get_parameter("angle.z.max_angle").as_double());
+  }
+  catch (const std::runtime_error & e)
+  {
+    RCLCPP_ERROR(node_->get_logger(), "Error configuring steering angle limiter: %s", e.what());
   }
 
   try
