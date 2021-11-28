@@ -95,6 +95,7 @@ controller_interface::return_type AckerDiffController::init(const std::string & 
     auto_declare<double>("linear.x.min_jerk", NAN);
 
     //TODO: actually conform to these limits
+    auto_declare<bool>("angle.z.has_position_limits", false);
     auto_declare<double>("angle.z.max_angle", NAN);
     auto_declare<double>("angle.z.min_angle", NAN);
 
@@ -217,6 +218,7 @@ controller_interface::return_type AckerDiffController::update()
   //todo: add steering angle limit as well
   previous_commands_.pop();
   previous_commands_.emplace(*last_msg);
+  angular_command = std::abs(angular_command);  //angular is considered in the direction of steering error
 
   //    Publish limited velocity
   if (publish_limited_velocity_ && realtime_limited_command_publisher_->trylock())
@@ -237,7 +239,7 @@ controller_interface::return_type AckerDiffController::update()
     return controller_interface::return_type::ERROR;
   }
 
-  RCLCPP_WARN_ONCE(
+  RCLCPP_WARN(
     logger,
     "From current steering angle " + std::to_string(current_steering_angle) +
     "\ncommands:" +
@@ -246,25 +248,46 @@ controller_interface::return_type AckerDiffController::update()
     "\n\tangular: " + std::to_string(angular_command)
   );
 
-  // Compute wheels velocities:
-  (void) angle_command;
+  const double max_angle_error = M_PI_4;    // TODO: Make this configurable
+  double angle_error = current_steering_angle - angle_command;
+  // TODO: Use PID or sumthin'
+  double angular_correction = 0;
+  angular_correction = (angle_error / max_angle_error) * angular_command;
+  RCLCPP_WARN(logger,
+      "angular correction: %lf = (%lf / %lf) * %lf",
+      angular_correction, max_angle_error, angle_error, angular_command);
+
+  if(std::abs(angular_correction) > angular_command) {
+    auto linear_command_old = linear_command;
+    linear_command = 0;
+    limiter_linear_.limit(
+        linear_command, linear_command_old, linear_command, update_dt.seconds());  // set speed gradually to zero
+    angular_correction = angular_correction > 0 ? angular_command : -angular_command;
+  }
+
+  RCLCPP_WARN(logger,
+      "Angle error: %lf\n"
+      "correction: %lf", angle_error, angular_correction
+  );
+
+  // todo: ackermann-Berechnung
+  double linear_part_left = linear_command;
+  double linear_part_right = linear_command;
+
+
   const double velocity_left =
-    (linear_command - angular_command * wheel_separation / 2.0) / left_wheel_radius;
-  RCLCPP_INFO_ONCE(logger,
-      "%lf = (%lf - %lf * %lf / 2.0) / %lf",
-      velocity_left, linear_command, angular_command, wheel_separation, left_wheel_radius);
+    (linear_part_left - angular_correction * wheel_separation / 2.0) / left_wheel_radius;
   const double velocity_right =
-    (linear_command + angular_command * wheel_separation / 2.0) / right_wheel_radius;
+    (linear_part_right + angular_correction * wheel_separation / 2.0) / right_wheel_radius;
+
+  RCLCPP_WARN(logger,
+      "Velocity left: %lf = (%lf - %lf * %lf / 2.0) / %lf",
+      velocity_left, linear_command, angular_correction, wheel_separation, left_wheel_radius);
+
 
   // Set wheels velocities:
   for (size_t index = 0; index < wheels.wheels_per_side; ++index)
   {
-    RCLCPP_WARN_ONCE(
-      logger,
-        "setting velocity: \n" +
-        std::to_string(velocity_left) + "\n" +
-        std::to_string(velocity_right)
-    );
     registered_left_wheel_handles_[index].velocity.get().set_value(velocity_left);
     registered_right_wheel_handles_[index].velocity.get().set_value(velocity_right);
   }
@@ -411,12 +434,12 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
       std::make_shared<realtime_tools::RealtimePublisher<AckermannStamped>>(limited_command_publisher_);
   }
 
-  const AckermannStamped empty_twist;
-  received_command_msg_ptr_.set(std::make_shared<AckermannStamped>(empty_twist));
+  const AckermannStamped empty_cmd;
+  received_command_msg_ptr_.set(std::make_shared<AckermannStamped>(empty_cmd));
 
   // Fill last two commands with default constructed commands
-  previous_commands_.emplace(empty_twist);
-  previous_commands_.emplace(empty_twist);
+  previous_commands_.emplace(empty_cmd);
+  previous_commands_.emplace(empty_cmd);
 
   // initialize command subscriber
   if (use_stamped_vel_)
