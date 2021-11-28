@@ -66,6 +66,7 @@ controller_interface::return_type AckerDiffController::init(const std::string & 
     auto_declare<std::string>("steering_axle_name", std::string());
 
     auto_declare<double>("wheel_separation", wheel_params_.separation);
+    auto_declare<double>("wheel_base_distance", wheel_params_.wheelbase);
     auto_declare<int>("wheels_per_side", wheel_params_.wheels_per_side);
     auto_declare<double>("wheel_radius", wheel_params_.radius);
     auto_declare<double>("wheel_separation_multiplier", wheel_params_.separation_multiplier);
@@ -155,10 +156,6 @@ InterfaceConfiguration AckerDiffController::state_interface_configuration() cons
 controller_interface::return_type AckerDiffController::update()
 {
   auto logger = node_->get_logger();
-  RCLCPP_WARN_ONCE(
-    logger,
-    "update function called"
-  );
   if (get_current_state().id() == State::PRIMARY_STATE_INACTIVE)
   {
     if (!is_halted)
@@ -197,14 +194,9 @@ controller_interface::return_type AckerDiffController::update()
   // Apply (possibly new) multipliers:
   const auto wheels = wheel_params_;
   const double wheel_separation = wheels.separation_multiplier * wheels.separation;
-  if(std::isnan(wheel_separation))
-    RCLCPP_ERROR(logger,"Wheel_separation is NaN!");
+  const double wheel_base_distance = wheels.wheelbase;
   const double left_wheel_radius = wheels.left_radius_multiplier * wheels.radius;
-  if(std::isnan(left_wheel_radius))
-    RCLCPP_ERROR(logger,"left_wheel_radius is NaN!");
   const double right_wheel_radius = wheels.right_radius_multiplier * wheels.radius;
-  if(std::isnan(right_wheel_radius))
-    RCLCPP_ERROR(logger,"right_wheel_radius is NaN!");
 
   const auto update_dt = current_time - previous_update_timestamp_;
   previous_update_timestamp_ = current_time;
@@ -239,7 +231,7 @@ controller_interface::return_type AckerDiffController::update()
     return controller_interface::return_type::ERROR;
   }
 
-  RCLCPP_WARN(
+  RCLCPP_DEBUG(
     logger,
     "From current steering angle " + std::to_string(current_steering_angle) +
     "\ncommands:" +
@@ -253,7 +245,7 @@ controller_interface::return_type AckerDiffController::update()
   // TODO: Use PID or sumthin'
   double angular_correction = 0;
   angular_correction = (angle_error / max_angle_error) * angular_command;
-  RCLCPP_WARN(logger,
+  RCLCPP_DEBUG(logger,
       "angular correction: %lf = (%lf / %lf) * %lf",
       angular_correction, max_angle_error, angle_error, angular_command);
 
@@ -265,22 +257,48 @@ controller_interface::return_type AckerDiffController::update()
     angular_correction = angular_correction > 0 ? angular_command : -angular_command;
   }
 
-  RCLCPP_WARN(logger,
+  RCLCPP_DEBUG(logger,
       "Angle error: %lf\n"
       "correction: %lf", angle_error, angular_correction
   );
 
-  // todo: ackermann-Berechnung
   double linear_part_left = linear_command;
   double linear_part_right = linear_command;
 
+  //TODO: magic value where turning angle is so small that different speeds are not needed
+  const double min_abs_turning_angle_for_ackermann = 0.05;
+  if(std::abs(angle_command) > min_abs_turning_angle_for_ackermann) {
+    auto abs_alpha = M_PI_2 - std::abs(angle_command);
+    auto turning_radius = wheel_base_distance / cos(abs_alpha);
+
+    //if(linear_command < 0)
+    //  turning_radius *= -1;
+
+    // is wheel_separation measured from turning center or absolute?
+    linear_part_left = (turning_radius + wheel_separation/2.0) * atan(linear_command / turning_radius);
+    linear_part_right = (turning_radius - wheel_separation/2.0) * atan(linear_command / turning_radius);
+
+    if(angle_command < 0)
+      std::swap(linear_part_left, linear_part_right);
+    //if(linear_command < 0)
+    //  std::swap(linear_part_left, linear_part_right);
+
+
+    RCLCPP_DEBUG(logger,
+        "\n\tlinear_part_left : %lf = (%lf + %lf/2) * atan(%lf / %lf)"
+        "\n\tlinear_part_right: %lf = (%lf - %lf/2) * %lf",
+        linear_part_left, turning_radius, wheel_separation, linear_command, turning_radius,
+        linear_part_right, turning_radius, wheel_separation, atan(linear_command / turning_radius)
+    );
+
+  }
 
   const double velocity_left =
     (linear_part_left - angular_correction * wheel_separation / 2.0) / left_wheel_radius;
   const double velocity_right =
     (linear_part_right + angular_correction * wheel_separation / 2.0) / right_wheel_radius;
 
-  RCLCPP_WARN(logger,
+  RCLCPP_DEBUG(logger,
       "Velocity left: %lf = (%lf - %lf * %lf / 2.0) / %lf",
       velocity_left, linear_command, angular_correction, wheel_separation, left_wheel_radius);
 
@@ -298,17 +316,13 @@ controller_interface::return_type AckerDiffController::update()
 CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &)
 {
   auto logger = node_->get_logger();
-  RCLCPP_WARN(
-    logger,
-    "on_configure called"
-  );
 
   // update parameters
   left_wheel_names_ = node_->get_parameter("left_wheel_names").as_string_array();
   right_wheel_names_ = node_->get_parameter("right_wheel_names").as_string_array();
   steering_axle_name_ = node_->get_parameter("steering_axle_name").as_string();
 
-  RCLCPP_WARN_ONCE(
+  RCLCPP_INFO_ONCE(
     logger,
     "Wheel names: \n" +
     left_wheel_names_[0] + "\n" +
@@ -341,6 +355,12 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
   if(std::isnan(wheel_params_.separation) || wheel_params_.separation == 0) {
     RCLCPP_ERROR(logger,
         "Wheel separation '%lf' is unplausible!", wheel_params_.separation);
+    return CallbackReturn::ERROR;
+  }
+  wheel_params_.wheelbase = node_->get_parameter("wheel_base_distance").as_double();
+  if(std::isnan(wheel_params_.wheelbase) || wheel_params_.wheelbase == 0) {
+    RCLCPP_ERROR(logger,
+        "Wheel wheelbase distance '%lf' is unplausible!", wheel_params_.wheelbase);
     return CallbackReturn::ERROR;
   }
   wheel_params_.wheels_per_side =
