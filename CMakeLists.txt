@@ -118,6 +118,7 @@ ament_export_dependencies(
 )
 ament_export_include_directories(
   include
+  lib
 )
 ament_export_libraries(
   acker_diff_controller

@@ -41,6 +41,7 @@
 #include "acker_diff_controller/odometry.hpp"
 #include "acker_diff_controller/speed_limiter.hpp"
 #include "acker_diff_controller/visibility_control.h"
+#include "../lib/minimal-PID-controller/pid.h"
 
 namespace acker_diff_controller
 {
@@ -104,6 +105,8 @@ protected:
     double right;
   };
 
+  double last_limited_linear_command_;
+
   WheelSpeeds calc_turning_speeds(double linear_speed, double turning_angle);
   WheelSpeeds mix_linear_and_angular(AckerDiffController::WheelSpeeds linear, double angular_speed);
 
@@ -136,6 +139,12 @@ protected:
     std::array<double, 6> pose_covariance_diagonal;
     std::array<double, 6> twist_covariance_diagonal;
   } odom_params_;
+
+  PID::Settings pid_params_ = PID::Settings{
+    .Kp = 1, .Ki = 0.5, .Kd = 0.01,
+    .dt = 1, .max = NAN, .min = NAN
+  };
+  PID pid_controller_;
 
   Odometry odometry_;
 
