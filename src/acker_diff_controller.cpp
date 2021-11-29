@@ -188,13 +188,6 @@ controller_interface::return_type AckerDiffController::update()
   double angle_command = last_msg->drive.steering_angle;
   double angular_command = last_msg->drive.steering_angle_velocity;
 
-  // Apply (possibly new) multipliers:
-  const auto wheels = wheel_params_;
-  const double wheel_separation = wheels.separation_multiplier * wheels.separation;
-  const double wheel_base_distance = wheels.wheelbase;
-  const double left_wheel_radius = wheels.left_radius_multiplier * wheels.radius;
-  const double right_wheel_radius = wheels.right_radius_multiplier * wheels.radius;
-
   const auto update_dt = current_time - previous_update_timestamp_;
   previous_update_timestamp_ = current_time;
 
@@ -258,21 +251,13 @@ controller_interface::return_type AckerDiffController::update()
     linear = calc_turning_speeds(linear_command, angle_command);
   }
 
-  const double velocity_left =
-    (linear.left - angular_correction * wheel_separation / 2.0) / left_wheel_radius;
-  const double velocity_right =
-    (linear.right + angular_correction * wheel_separation / 2.0) / right_wheel_radius;
-
-  RCLCPP_DEBUG(logger,
-      "Velocity left: %lf = (%lf - %lf * %lf / 2.0) / %lf",
-      velocity_left, linear_command, angular_correction, wheel_separation, left_wheel_radius);
-
+  WheelSpeeds final_vel = mix_linear_and_angular(linear, angular_correction);
 
   // Set wheels velocities:
-  for (size_t index = 0; index < wheels.wheels_per_side; ++index)
+  for (size_t index = 0; index < wheel_params_.wheels_per_side; ++index)
   {
-    registered_left_wheel_handles_[index].velocity.get().set_value(velocity_left);
-    registered_right_wheel_handles_[index].velocity.get().set_value(velocity_right);
+    registered_left_wheel_handles_[index].velocity.get().set_value(final_vel.left);
+    registered_right_wheel_handles_[index].velocity.get().set_value(final_vel.right);
   }
 
   return controller_interface::return_type::OK;
@@ -698,7 +683,8 @@ CallbackReturn AckerDiffController::configure_steering_angle(std::string & name,
   return CallbackReturn::SUCCESS;
 }
 
-AckerDiffController::WheelSpeeds AckerDiffController::calc_turning_speeds(double linear_speed, double turning_angle) {
+AckerDiffController::WheelSpeeds AckerDiffController::calc_turning_speeds(
+    double linear_speed, double turning_angle) {
   WheelSpeeds ret{linear_speed, linear_speed};
   if (turning_angle == 0) {
     RCLCPP_WARN(node_->get_logger(), "calc_turning_speeds: Turning angle is zero!");
@@ -725,6 +711,28 @@ AckerDiffController::WheelSpeeds AckerDiffController::calc_turning_speeds(double
       ret.left, turning_radius, wheel_separation, linear_speed, turning_radius,
       ret.right, turning_radius, wheel_separation, atan(linear_speed / turning_radius)
   );
+
+  return ret;
+}
+
+AckerDiffController::WheelSpeeds AckerDiffController::mix_linear_and_angular(
+    AckerDiffController::WheelSpeeds linear, double angular_speed) {
+  // get perhaps updated config
+  const double wheel_separation =
+      wheel_params_.separation_multiplier * wheel_params_.separation;
+  const double left_wheel_radius =
+      wheel_params_.left_radius_multiplier * wheel_params_.radius;
+  const double right_wheel_radius =
+      wheel_params_.right_radius_multiplier * wheel_params_.radius;
+
+  WheelSpeeds ret {
+    (linear.left - angular_speed * wheel_separation / 2.0) / left_wheel_radius,
+    (linear.right + angular_speed * wheel_separation / 2.0) / right_wheel_radius
+  };
+
+  RCLCPP_DEBUG(node_->get_logger(),
+     "Velocity left: %lf = (%lf - %lf * %lf / 2.0) / %lf",
+      ret.left, linear.left , angular_speed, wheel_separation, left_wheel_radius);
 
   return ret;
 }

@@ -1,0 +1,3 @@
+[submodule "lib/minimal-PID-controller"]
+	path = lib/minimal-PID-controller
+	url = https://github.com/Cirromulus/minimal-PID-controller

@@ -105,6 +105,7 @@ protected:
   };
 
   WheelSpeeds calc_turning_speeds(double linear_speed, double turning_angle);
+  WheelSpeeds mix_linear_and_angular(AckerDiffController::WheelSpeeds linear, double angular_speed);
 
   std::vector<std::string> left_wheel_names_;
   std::vector<std::string> right_wheel_names_;

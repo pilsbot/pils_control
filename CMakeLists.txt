@@ -27,6 +27,7 @@ add_library(acker_diff_controller SHARED
   src/acker_diff_controller.cpp
   src/odometry.cpp
   src/speed_limiter.cpp
+  lib/minimal-PID-controller/pid.cpp
 )
 
 target_include_directories(acker_diff_controller PRIVATE include)
@@ -51,7 +52,7 @@ target_compile_definitions(acker_diff_controller PRIVATE "acker_diff_controller_
 target_compile_definitions(acker_diff_controller PUBLIC "PLUGINLIB__DISABLE_BOOST_FUNCTIONS")
 pluginlib_export_plugin_description_file(controller_interface acker_diff_plugin.xml)
 
-install(DIRECTORY include/
+install(DIRECTORY include/ lib/minimal-PID-controller
   DESTINATION include
 )
 
