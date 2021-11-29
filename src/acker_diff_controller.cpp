@@ -223,7 +223,7 @@ controller_interface::return_type AckerDiffController::update()
     angular_correction =
         -pid_controller_.calculate(angle_command, current_steering_angle, pid_params_);
 
-    RCLCPP_WARN(logger,
+    RCLCPP_DEBUG(logger,
         "Angle error: %lf\n"
         "correction: %lf", (angle_command - current_steering_angle), angular_correction
     );
