@@ -95,7 +95,6 @@ controller_interface::return_type AckerDiffController::init(const std::string & 
     auto_declare<double>("linear.x.max_jerk", NAN);
     auto_declare<double>("linear.x.min_jerk", NAN);
 
-    //TODO: actually conform to these limits
     auto_declare<bool>("angle.z.has_position_limits", false);
     auto_declare<double>("angle.z.max_angle", NAN);
     auto_declare<double>("angle.z.min_angle", NAN);
@@ -130,8 +129,6 @@ InterfaceConfiguration AckerDiffController::command_interface_configuration() co
   {
     conf_names.push_back(joint_name + "/" + HW_IF_VELOCITY);
   }
-
-  // todo: is this the "output" interface?
 
   return {interface_configuration_type::INDIVIDUAL, conf_names};
 }
@@ -253,36 +250,18 @@ controller_interface::return_type AckerDiffController::update()
       "correction: %lf", angle_error, angular_correction
   );
 
-  double linear_part_left = linear_command;
-  double linear_part_right = linear_command;
+  WheelSpeeds linear{linear_command, linear_command};
 
   //TODO: magic value where turning angle is so small that different speeds are not needed
   const double min_abs_turning_angle_for_ackermann = 0.05;
-  // also prevents div/0
   if(std::abs(angle_command) > min_abs_turning_angle_for_ackermann) {
-    auto abs_alpha = M_PI_2 - std::abs(angle_command);
-    auto turning_radius = wheel_base_distance / cos(abs_alpha);
-
-    // is wheel_separation measured from turning center or absolute?
-    linear_part_left = (turning_radius + wheel_separation/2.0) * atan(linear_command / turning_radius);
-    linear_part_right = (turning_radius - wheel_separation/2.0) * atan(linear_command / turning_radius);
-
-    if(angle_command < 0)
-      std::swap(linear_part_left, linear_part_right);
-
-    RCLCPP_DEBUG(logger,
-        "\n\tlinear_part_left : %lf = (%lf + %lf/2) * atan(%lf / %lf)"
-        "\n\tlinear_part_right: %lf = (%lf - %lf/2) * %lf",
-        linear_part_left, turning_radius, wheel_separation, linear_command, turning_radius,
-        linear_part_right, turning_radius, wheel_separation, atan(linear_command / turning_radius)
-    );
-
+    linear = calc_turning_speeds(linear_command, angle_command);
   }
 
   const double velocity_left =
-    (linear_part_left - angular_correction * wheel_separation / 2.0) / left_wheel_radius;
+    (linear.left - angular_correction * wheel_separation / 2.0) / left_wheel_radius;
   const double velocity_right =
-    (linear_part_right + angular_correction * wheel_separation / 2.0) / right_wheel_radius;
+    (linear.right + angular_correction * wheel_separation / 2.0) / right_wheel_radius;
 
   RCLCPP_DEBUG(logger,
       "Velocity left: %lf = (%lf - %lf * %lf / 2.0) / %lf",
@@ -408,10 +387,6 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
 
   try
   {
-    auto_declare<bool>("angle.z.has_position_limits", false);
-    auto_declare<double>("angle.z.max_angle", NAN);
-    auto_declare<double>("angle.z.min_angle", NAN);
-
     limiter_angle_ = SpeedLimiter(
       node_->get_parameter("angle.z.has_position_limits").as_bool(),
       false, false,
@@ -549,11 +524,6 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
 
 CallbackReturn AckerDiffController::on_activate(const rclcpp_lifecycle::State &)
 {
-  RCLCPP_INFO(
-    node_->get_logger(),
-    "on_activate called"
-  );
-
   const auto left_result =
     configure_side("left", left_wheel_names_, registered_left_wheel_handles_);
   const auto right_result =
@@ -726,6 +696,37 @@ CallbackReturn AckerDiffController::configure_steering_angle(std::string & name,
   handle.emplace_back(std::ref(*state_handle));
 
   return CallbackReturn::SUCCESS;
+}
+
+AckerDiffController::WheelSpeeds AckerDiffController::calc_turning_speeds(double linear_speed, double turning_angle) {
+  WheelSpeeds ret{linear_speed, linear_speed};
+  if (turning_angle == 0) {
+    RCLCPP_WARN(node_->get_logger(), "calc_turning_speeds: Turning angle is zero!");
+    return ret;
+  }
+
+  // get perhaps updated config
+  const double wheel_separation = wheel_params_.separation_multiplier * wheel_params_.separation;
+  const double wheel_base_distance = wheel_params_.wheelbase;
+
+  auto abs_alpha = M_PI_2 - std::abs(turning_angle);
+  auto turning_radius = wheel_base_distance / cos(abs_alpha);
+
+
+  ret.left = (turning_radius + wheel_separation/2.0) * atan(linear_speed / turning_radius);
+  ret.right = (turning_radius - wheel_separation/2.0) * atan(linear_speed / turning_radius);
+
+  if(turning_angle < 0)
+    std::swap(ret.left, ret.right);
+
+  RCLCPP_DEBUG(node_->get_logger(),
+      "\n\tlinear_part_left : %lf = (%lf + %lf/2) * atan(%lf / %lf)"
+      "\n\tlinear_part_right: %lf = (%lf - %lf/2) * %lf",
+      ret.left, turning_radius, wheel_separation, linear_speed, turning_radius,
+      ret.right, turning_radius, wheel_separation, atan(linear_speed / turning_radius)
+  );
+
+  return ret;
 }
 
 }  // namespace acker_drive_controller
