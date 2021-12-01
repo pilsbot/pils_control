@@ -179,7 +179,7 @@ controller_interface::return_type AckerDiffController::update()
   }
 
   const auto dt = current_time - last_msg->header.stamp;
-  // Brake if cmd_vel has timeout, override the stored command
+  // Brake if cmd_vel has timed out, override the stored command
   if (dt > cmd_vel_timeout_)
   {
     last_msg->drive.speed = 0;
@@ -187,7 +187,6 @@ controller_interface::return_type AckerDiffController::update()
   }
 
   // linear_command and angular_command may be limited further by SpeedLimit,
-  // without affecting the stored twist command
   double linear_command = last_msg->drive.speed;
   double angle_command = last_msg->drive.steering_angle;
   double angular_command = last_msg->drive.steering_angle_velocity;
@@ -205,7 +204,6 @@ controller_interface::return_type AckerDiffController::update()
   previous_commands_.pop();
   previous_commands_.emplace(*last_msg);
   angular_command = std::abs(angular_command);  //angular is considered in the direction of steering error
-
 
 
   const double current_steering_angle = registered_steering_axle_handle_[0].get().get_value();
@@ -255,21 +253,26 @@ controller_interface::return_type AckerDiffController::update()
     realtime_limited_command_publisher_->unlockAndPublish();
   }
 
-  WheelSpeeds linear{linear_command, linear_command};
+  WheelSpeeds linear_speed{linear_command, linear_command};
 
   //TODO: magic value where turning angle is so small that different speeds are not needed
   const double min_abs_turning_angle_for_ackermann = 0.05;
   if(std::abs(angle_command) > min_abs_turning_angle_for_ackermann) {
-    linear = calc_turning_speeds(linear_command, angle_command);
+    linear_speed = calc_turning_speeds(linear_command, angle_command);
   }
 
-  WheelSpeeds final_vel = mix_linear_and_angular(linear, angular_correction);
+  WheelTurningRate final_turning_rate = mix_linear_and_angular(linear_speed, angular_correction);
 
-  // Set wheels velocities:
+  // odometry updates
+  if(!update_odometry(final_turning_rate, current_time)) {
+    return controller_interface::return_type::ERROR;
+  }
+
+  // Set wheels turning rates:
   for (size_t index = 0; index < wheel_params_.wheels_per_side; ++index)
   {
-    registered_left_wheel_handles_[index].velocity.get().set_value(final_vel.left);
-    registered_right_wheel_handles_[index].velocity.get().set_value(final_vel.right);
+    registered_left_wheel_handles_[index].velocity.get().set_value(final_turning_rate.left);
+    registered_right_wheel_handles_[index].velocity.get().set_value(final_turning_rate.right);
   }
 
   return controller_interface::return_type::OK;
@@ -675,7 +678,9 @@ CallbackReturn AckerDiffController::configure_side(
     }
 
     registered_handles.emplace_back(
-      WheelHandle{std::ref(*state_handle), std::ref(*command_handle)});
+      WheelHandle{.position = std::ref(*state_handle),
+                  .velocity = std::ref(*command_handle)
+      });
   }
 
   return CallbackReturn::SUCCESS;
@@ -709,7 +714,7 @@ CallbackReturn AckerDiffController::configure_steering_angle(std::string & name,
 }
 
 AckerDiffController::WheelSpeeds AckerDiffController::calc_turning_speeds(
-    double linear_speed, double turning_angle) {
+    const double linear_speed, const double turning_angle) {
   WheelSpeeds ret{linear_speed, linear_speed};
   if (turning_angle == 0) {
     RCLCPP_WARN(node_->get_logger(), "calc_turning_speeds: Turning angle is zero!");
@@ -741,7 +746,7 @@ AckerDiffController::WheelSpeeds AckerDiffController::calc_turning_speeds(
 }
 
 AckerDiffController::WheelSpeeds AckerDiffController::mix_linear_and_angular(
-    AckerDiffController::WheelSpeeds linear, double angular_speed) {
+    const AckerDiffController::WheelSpeeds& linear, const double angular_speed) {
   // get perhaps updated config
   const double wheel_separation =
       wheel_params_.separation_multiplier * wheel_params_.separation;
@@ -760,6 +765,93 @@ AckerDiffController::WheelSpeeds AckerDiffController::mix_linear_and_angular(
       ret.left, linear.left , angular_speed, wheel_separation, left_wheel_radius);
 
   return ret;
+}
+
+bool AckerDiffController::update_odometry(
+    const AckerDiffController::WheelTurningRate& set_turning_rate,
+    const rclcpp::Time& current_time) {
+
+  if (odom_params_.open_loop)
+  {
+    // get perhaps updated config
+    const double wheel_separation =
+        wheel_params_.separation_multiplier * wheel_params_.separation;
+    const double left_wheel_radius =
+        wheel_params_.left_radius_multiplier * wheel_params_.radius;
+    const double right_wheel_radius =
+        wheel_params_.right_radius_multiplier * wheel_params_.radius;
+
+    //back-calculate wheel turning rates to linear/angular proportions
+    WheelSpeeds set_velocity = {.left = set_turning_rate.left * left_wheel_radius,
+                                .right = set_turning_rate.right * right_wheel_radius};
+
+    // basically inverse of mix_linear_and_angular()
+    double mean_linear = ( set_velocity.left + set_velocity.right ) / 2;
+
+    double angular_proportion = (set_velocity.right - set_velocity.left)
+                                / (wheel_separation);   // Why not divide by 2?
+    odometry_.updateOpenLoop(mean_linear , angular_proportion, current_time);
+  }
+  else
+  {
+    double left_feedback_mean = 0.0;
+    double right_feedback_mean = 0.0;
+    for (size_t index = 0; index < wheel_params_.wheels_per_side; ++index)
+    {
+      const double left_feedback =
+          registered_left_wheel_handles_[index].position.get().get_value();
+      const double right_feedback =
+          registered_right_wheel_handles_[index].position.get().get_value();
+
+      if (std::isnan(left_feedback) || std::isnan(right_feedback))
+      {
+        RCLCPP_ERROR(
+            node_->get_logger(),
+            "Either the left or right wheel is invalid for index [%zu]", index);
+        return false;
+      }
+
+      left_feedback_mean += left_feedback;
+      right_feedback_mean += right_feedback;
+    }
+    left_feedback_mean /= wheel_params_.wheels_per_side;
+    right_feedback_mean /= wheel_params_.wheels_per_side;
+
+    odometry_.update(left_feedback_mean, right_feedback_mean, current_time);
+
+  }
+
+  tf2::Quaternion orientation;
+  orientation.setRPY(0.0, 0.0, odometry_.getHeading());
+
+  if (realtime_odometry_publisher_->trylock())
+  {
+    auto & odometry_message = realtime_odometry_publisher_->msg_;
+    odometry_message.header.stamp = current_time;
+    odometry_message.pose.pose.position.x = odometry_.getX();
+    odometry_message.pose.pose.position.y = odometry_.getY();
+    odometry_message.pose.pose.orientation.x = orientation.x();
+    odometry_message.pose.pose.orientation.y = orientation.y();
+    odometry_message.pose.pose.orientation.z = orientation.z();
+    odometry_message.pose.pose.orientation.w = orientation.w();
+    odometry_message.twist.twist.linear.x = odometry_.getLinear();
+    odometry_message.twist.twist.angular.z = odometry_.getAngular();
+    realtime_odometry_publisher_->unlockAndPublish();
+  }
+
+  if (odom_params_.enable_odom_tf && realtime_odometry_transform_publisher_->trylock())
+  {
+    auto & transform = realtime_odometry_transform_publisher_->msg_.transforms.front();
+    transform.header.stamp = current_time;
+    transform.transform.translation.x = odometry_.getX();
+    transform.transform.translation.y = odometry_.getY();
+    transform.transform.rotation.x = orientation.x();
+    transform.transform.rotation.y = orientation.y();
+    transform.transform.rotation.z = orientation.z();
+    transform.transform.rotation.w = orientation.w();
+    realtime_odometry_transform_publisher_->unlockAndPublish();
+  }
+  return true;
 }
 
 }  // namespace acker_drive_controller

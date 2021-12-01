@@ -104,11 +104,16 @@ protected:
     double left;
     double right;
   };
+  typedef WheelSpeeds WheelTurningRate;
 
   double last_limited_linear_command_;
 
-  WheelSpeeds calc_turning_speeds(double linear_speed, double turning_angle);
-  WheelSpeeds mix_linear_and_angular(AckerDiffController::WheelSpeeds linear, double angular_speed);
+  WheelSpeeds calc_turning_speeds(const double linear_speed,
+                                  const double turning_angle);
+  WheelTurningRate mix_linear_and_angular(const AckerDiffController::WheelSpeeds& linear,
+                                          const double angular_speed);
+  bool update_odometry(const AckerDiffController::WheelTurningRate& set_turning_rate,
+                       const rclcpp::Time& current_time);
 
   std::vector<std::string> left_wheel_names_;
   std::vector<std::string> right_wheel_names_;
