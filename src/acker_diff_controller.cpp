@@ -221,6 +221,19 @@ controller_interface::return_type AckerDiffController::update()
     angular_correction =
         -pid_controller_.calculate(angle_command, current_steering_angle, pid_params_);
 
+    // check for significant controller overshoot on maximum angle for safety
+    if( (current_steering_angle >= steering_params_.max_angle && angular_correction < 0) ||
+        (current_steering_angle <= steering_params_.min_angle && angular_correction > 0) ) {
+      //we would oversteer into endstops
+      RCLCPP_WARN(logger,
+          "Current steering angle (%lf) over configured limit (%lf - %lf)!\n"
+          "Resetting PID-Controller.\n"
+          "If this happens frequently, consider re-tuning the PID values.",
+          current_steering_angle, steering_params_.min_angle, steering_params_.max_angle);
+      angular_correction = 0;
+      pid_controller_ = PID();  // resets internals
+    }
+
     RCLCPP_DEBUG(logger,
         "Angle error: %lf\n"
         "correction: %lf", (angle_command - current_steering_angle), angular_correction
@@ -385,13 +398,21 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
     RCLCPP_ERROR(node_->get_logger(), "Error configuring linear speed limiter: %s", e.what());
   }
 
+  steering_params_ = SteeringParams {
+      .has_position_limit = node_->get_parameter("angle.z.has_position_limits").as_bool(),
+      .max_angle = node_->get_parameter("angle.z.max_angle").as_double(),
+      .min_angle = node_->get_parameter("angle.z.min_angle").as_double()
+  };
+  if(steering_params_.has_position_limit && isnan(steering_params_.min_angle)) {
+    steering_params_.min_angle = -steering_params_.max_angle;
+  }
   try
   {
     limiter_angle_ = SpeedLimiter(
-      node_->get_parameter("angle.z.has_position_limits").as_bool(),
+      steering_params_.has_position_limit,
       false, false,
-      node_->get_parameter("angle.z.min_angle").as_double(),
-      node_->get_parameter("angle.z.max_angle").as_double());
+      steering_params_.min_angle,
+      steering_params_.max_angle);
   }
   catch (const std::runtime_error & e)
   {

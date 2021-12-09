@@ -135,6 +135,12 @@ protected:
     double right_radius_multiplier = 1.0;
   } wheel_params_;
 
+  struct SteeringParams {
+    bool has_position_limit = false;
+    double max_angle = 0;
+    double min_angle = 0;
+  } steering_params_;
+
   struct OdometryParams
   {
     bool open_loop = false;
