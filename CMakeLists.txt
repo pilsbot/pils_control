@@ -14,6 +14,7 @@ find_package(ament_cmake REQUIRED)
 find_package(controller_interface REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(ackermann_msgs REQUIRED)
+find_package(pilsbot_driver_msgs REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
@@ -32,10 +33,11 @@ add_library(acker_diff_controller SHARED
 
 target_include_directories(acker_diff_controller PRIVATE include)
 ament_target_dependencies(acker_diff_controller
-  ackermann_msgs
   builtin_interfaces
   controller_interface
   geometry_msgs
+  ackermann_msgs
+  pilsbot_driver_msgs
   hardware_interface
   nav_msgs
   pluginlib
