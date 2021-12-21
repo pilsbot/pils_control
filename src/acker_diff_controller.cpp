@@ -281,6 +281,9 @@ controller_interface::return_type AckerDiffController::update()
     return controller_interface::return_type::ERROR;
   }
 
+  // TODO: FIXME: In future, create a dedicated state publisher in controller logic
+  publish_available_sensors();
+
   // Set wheels turning rates:
   for (size_t index = 0; index < wheel_params_.wheels_per_side; ++index)
   {
@@ -561,10 +564,12 @@ CallbackReturn AckerDiffController::on_activate(const rclcpp_lifecycle::State &)
     configure_steering_angle(steering_axle_name_, registered_steering_axle_handle_);
 
   if(configure_hoverboard_api_sensors(registered_hoverboard_sensors_) == CallbackReturn::SUCCESS) {
+    RCLCPP_INFO(node_->get_logger(), "publishing /hoverboard_api");
     hoverboard_api_publisher_ = node_->create_publisher<HoverboardAPISensors>(
         "/hoverboard_api", rclcpp::SystemDefaultsQoS());
   }
   if(configure_head_mcu_sensors(registered_head_mcu_sensors_) == CallbackReturn::SUCCESS) {
+	RCLCPP_INFO(node_->get_logger(), "publishing /head_mcu");
     head_mcu_publisher_ = node_->create_publisher<SteeringAxleSensorsStamped>(
         "/head_mcu", rclcpp::SystemDefaultsQoS());
   }
