@@ -151,6 +151,16 @@ InterfaceConfiguration AckerDiffController::state_interface_configuration() cons
 
   conf_names.push_back(steering_axle_name_ + "/" + HW_IF_POSITION);
 
+   // TODO: Move into extra state publisher
+  conf_names.push_back("hoverboard_api/voltage");
+  conf_names.push_back("hoverboard_api/avg_amperage_motor.0");
+  conf_names.push_back("hoverboard_api/avg_amperage_motor.1");
+  conf_names.push_back("hoverboard_api/tx_bufferlevel");
+
+  conf_names.push_back("head_mcu/steering_angle_raw");
+  conf_names.push_back("head_mcu/endstop_l");
+  conf_names.push_back("head_mcu/endstop_r");
+
   return {interface_configuration_type::INDIVIDUAL, conf_names};
 }
 
