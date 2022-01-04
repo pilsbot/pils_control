@@ -108,7 +108,7 @@ controller_interface::return_type AckerDiffController::init(const std::string & 
     auto_declare<bool>("angular.z.has_jerk_limits", false);
     auto_declare<double>("angular.z.max_velocity", NAN);
     auto_declare<double>("angular.z.min_velocity", NAN);
-    auto_declare<double>("angular.z.max_acceleration", NAN);
+    auto_declare<double>("angular.z.max_acceleration", pid_params_.max_dv);
     auto_declare<double>("angular.z.min_acceleration", NAN);
     auto_declare<double>("angular.z.max_jerk", NAN);
     auto_declare<double>("angular.z.min_jerk", NAN);
@@ -455,8 +455,14 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
     .Ki = node_->get_parameter("pid.Ki").as_double(),
     .Kd = node_->get_parameter("pid.Kd").as_double(),
     .dt = 1,    //is set dynamically later by update rate
-    .max = NAN, .min = NAN  // these are limited by Angular limiter
+    .max = node_->get_parameter("angular.z.max_velocity").as_double(),
+    .min = node_->get_parameter("angular.z.min_velocity").as_double(),
+    .max_dv = NAN
   };
+
+  if(node_->get_parameter("angular.z.has_acceleration_limits").as_bool()) {
+    pid_params_.max_dv = node_->get_parameter("angular.z.max_acceleration").as_double();
+  }
 
   if (!reset())
   {

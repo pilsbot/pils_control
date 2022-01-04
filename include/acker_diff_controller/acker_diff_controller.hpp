@@ -183,7 +183,7 @@ protected:
 
   PID::Settings pid_params_ = PID::Settings{
     .Kp = 1, .Ki = 0.5, .Kd = 0.01,
-    .dt = 1, .max = NAN, .min = NAN
+    .dt = 1, .max = NAN, .min = NAN, .max_dv = NAN
   };
   PID pid_controller_;
 
