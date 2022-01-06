@@ -216,6 +216,10 @@ controller_interface::return_type AckerDiffController::update()
   double angular_correction = 0;
   // PID controller
   if(angular_command > 0) {     // if steering angle velocity = 0, dont regulate
+    if(last_command.steering_angle_velocity == 0) {
+      // we transitioned from passive to active steering, reset PID
+      pid_controller_ = PID();
+    }
     pid_params_.dt = update_dt.seconds();
     // negative feedback, because sensor is not mathematically but logically oriented
     angular_correction =
