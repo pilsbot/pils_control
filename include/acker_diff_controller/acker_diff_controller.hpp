@@ -37,8 +37,6 @@
 #include "realtime_tools/realtime_publisher.h"
 #include "tf2_msgs/msg/tf_message.hpp"
 #include "ackermann_msgs/msg/ackermann_drive_stamped.hpp"
-#include <pilsbot_driver_msgs/msg/steering_axle_sensors_stamped.hpp>
-#include <pilsbot_driver_msgs/msg/hoverboard_api_sensors.hpp>
 
 #include "acker_diff_controller/odometry.hpp"
 #include "acker_diff_controller/speed_limiter.hpp"
@@ -48,7 +46,6 @@
 namespace acker_diff_controller
 {
 using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
-using namespace pilsbot_driver_msgs::msg;
 
 class AckerDiffController : public controller_interface::ControllerInterface
 {
@@ -56,37 +53,37 @@ class AckerDiffController : public controller_interface::ControllerInterface
 	using Ackermann = ackermann_msgs::msg::AckermannDrive;
 
 public:
-  DIFF_DRIVE_CONTROLLER_PUBLIC
+  ACKER_DIFF_CONTROLLER_PUBLIC
   AckerDiffController();
 
-  DIFF_DRIVE_CONTROLLER_PUBLIC
+  ACKER_DIFF_CONTROLLER_PUBLIC
   controller_interface::return_type init(const std::string & controller_name) override;
 
-  DIFF_DRIVE_CONTROLLER_PUBLIC
+  ACKER_DIFF_CONTROLLER_PUBLIC
   controller_interface::InterfaceConfiguration command_interface_configuration() const override;
 
-  DIFF_DRIVE_CONTROLLER_PUBLIC
+  ACKER_DIFF_CONTROLLER_PUBLIC
   controller_interface::InterfaceConfiguration state_interface_configuration() const override;
 
-  DIFF_DRIVE_CONTROLLER_PUBLIC
+  ACKER_DIFF_CONTROLLER_PUBLIC
   controller_interface::return_type update() override;
 
-  DIFF_DRIVE_CONTROLLER_PUBLIC
+  ACKER_DIFF_CONTROLLER_PUBLIC
   CallbackReturn on_configure(const rclcpp_lifecycle::State & previous_state) override;
 
-  DIFF_DRIVE_CONTROLLER_PUBLIC
+  ACKER_DIFF_CONTROLLER_PUBLIC
   CallbackReturn on_activate(const rclcpp_lifecycle::State & previous_state) override;
 
-  DIFF_DRIVE_CONTROLLER_PUBLIC
+  ACKER_DIFF_CONTROLLER_PUBLIC
   CallbackReturn on_deactivate(const rclcpp_lifecycle::State & previous_state) override;
 
-  DIFF_DRIVE_CONTROLLER_PUBLIC
+  ACKER_DIFF_CONTROLLER_PUBLIC
   CallbackReturn on_cleanup(const rclcpp_lifecycle::State & previous_state) override;
 
-  DIFF_DRIVE_CONTROLLER_PUBLIC
+  ACKER_DIFF_CONTROLLER_PUBLIC
   CallbackReturn on_error(const rclcpp_lifecycle::State & previous_state) override;
 
-  DIFF_DRIVE_CONTROLLER_PUBLIC
+  ACKER_DIFF_CONTROLLER_PUBLIC
   CallbackReturn on_shutdown(const rclcpp_lifecycle::State & previous_state) override;
 
 protected:
@@ -100,21 +97,6 @@ protected:
     CommandIF velocity;
   };
 
-  struct HoverboardApiStates
-  {
-    StateIF voltage;
-    StateIF avg_amperage_motor_0;
-    StateIF avg_amperage_motor_1;
-    StateIF tx_bufferlevel;
-  };
-
-  struct HeadMCUStates
-  {
-    StateIF steering_angle_raw;
-    StateIF endstop_l;
-    StateIF endstop_r;
-  };
-
   typedef StateIF SteeringHandle;
 
 
@@ -123,9 +105,6 @@ protected:
     std::vector<WheelHandle> & registered_handles);
   CallbackReturn configure_steering_angle(std::string & name,
       std::vector<SteeringHandle>& handle);
-
-  CallbackReturn configure_hoverboard_api_sensors(std::vector<HoverboardApiStates>& handles);
-  CallbackReturn configure_head_mcu_sensors(std::vector<HeadMCUStates>& handles);
 
   struct WheelSpeeds {
     double left;
@@ -142,8 +121,6 @@ protected:
   bool update_odometry(const AckerDiffController::WheelTurningRate& set_turning_rate,
                        const rclcpp::Time& current_time);
 
-  void publish_available_sensors();
-
   std::vector<std::string> left_wheel_names_;
   std::vector<std::string> right_wheel_names_;
   std::string steering_axle_name_;
@@ -151,8 +128,6 @@ protected:
   std::vector<WheelHandle> registered_left_wheel_handles_;
   std::vector<WheelHandle> registered_right_wheel_handles_;
   std::vector<SteeringHandle> registered_steering_axle_handle_;
-  std::vector<HoverboardApiStates> registered_hoverboard_sensors_;
-  std::vector<HeadMCUStates> registered_head_mcu_sensors_;
 
   struct WheelParams
   {
@@ -197,11 +172,6 @@ protected:
     nullptr;
   std::shared_ptr<realtime_tools::RealtimePublisher<tf2_msgs::msg::TFMessage>>
     realtime_odometry_transform_publisher_ = nullptr;
-
-  std::shared_ptr<rclcpp::Publisher<HoverboardAPISensors>> hoverboard_api_publisher_ =
-      nullptr;
-  std::shared_ptr<rclcpp::Publisher<SteeringAxleSensorsStamped>> head_mcu_publisher_ =
-      nullptr;
 
   // Timeout to consider cmd_vel commands old
   std::chrono::milliseconds cmd_vel_timeout_{500};

@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.5)
 project(acker_diff_controller)
 
-# Default to C++14
+# Default to C++17
 if(NOT CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 14)
+  set(CMAKE_CXX_STANDARD 17)
 endif()
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -14,7 +14,6 @@ find_package(ament_cmake REQUIRED)
 find_package(controller_interface REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(ackermann_msgs REQUIRED)
-find_package(pilsbot_driver_msgs REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
@@ -37,7 +36,6 @@ ament_target_dependencies(acker_diff_controller
   controller_interface
   geometry_msgs
   ackermann_msgs
-  pilsbot_driver_msgs
   hardware_interface
   nav_msgs
   pluginlib
