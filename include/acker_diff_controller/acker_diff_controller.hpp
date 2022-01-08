@@ -13,7 +13,7 @@
 // limitations under the License.
 
 /*
- * Author: Bence Magyar, Enrique Fernández, Manuel Meraz
+ * Author: Pascal Pieper
  */
 
 #pragma once

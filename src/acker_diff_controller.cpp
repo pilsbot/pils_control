@@ -208,8 +208,8 @@ controller_interface::return_type AckerDiffController::update()
 
   const double current_steering_angle = registered_steering_axle_handle_[0].get().get_value();
   if (std::isnan(current_steering_angle)) {
-    RCLCPP_ERROR(
-      logger, "Could not get current steering angle!");
+    RCLCPP_ERROR(logger, // get_clock(), 1000,
+        "Could not get current steering angle!");
     return controller_interface::return_type::ERROR;
   }
 
