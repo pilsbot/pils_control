@@ -84,7 +84,7 @@ install(PROGRAMS
   scripts/cmd_vel_to_ackermann.py
   DESTINATION lib/${PROJECT_NAME}
 )
-ament_python_install_package(scripts)
+#ament_python_install_package(scripts) #conflicts with certain gazebo includes
 
 ament_export_libraries(
   acker_diff_controller
