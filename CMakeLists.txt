@@ -23,6 +23,9 @@ find_package(realtime_tools REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_msgs REQUIRED)
 
+find_package(rospy REQUIRED)
+find_package(ament_cmake_python REQUIRED)
+
 add_library(acker_diff_controller SHARED
   src/acker_diff_controller.cpp
   src/odometry.cpp
@@ -62,50 +65,6 @@ install(TARGETS acker_diff_controller
   LIBRARY DESTINATION lib
 )
 
-if(False) #BUILD_TESTING)
-  find_package(ament_cmake_gmock REQUIRED)
-  find_package(controller_manager REQUIRED)
-
-  ament_add_gmock(test_acker_diff_controller
-    test/test_acker_diff_controller.cpp
-    ENV config_file=${CMAKE_CURRENT_SOURCE_DIR}/test/config/test_acker_diff_controller.yaml)
-  target_include_directories(test_acker_diff_controller PRIVATE include)
-  target_link_libraries(test_acker_diff_controller
-    acker_diff_controller
-  )
-
-  ament_target_dependencies(test_acker_diff_controller
-    ackermann_msgs
-    geometry_msgs
-    hardware_interface
-    nav_msgs
-    rclcpp
-    rclcpp_lifecycle
-    realtime_tools
-    tf2
-    tf2_msgs
-  )
-
-  ament_add_gmock(
-    test_load_acker_diff_controller
-    test/test_load_acker_diff_controller.cpp
-  )
-  target_include_directories(test_load_acker_diff_controller PRIVATE include)
-  ament_target_dependencies(test_load_acker_diff_controller
-    controller_manager
-  )
-  target_compile_definitions(test_load_acker_diff_controller PUBLIC "PLUGINLIB__DISABLE_BOOST_FUNCTIONS")
-
-  ament_add_gmock(
-    test_accumulator
-    test/test_accumulator.cpp
-  )
-
-  target_include_directories(test_accumulator PRIVATE include)
-  ament_target_dependencies(test_accumulator)
-
-endif()
-
 ament_export_dependencies(
   ackermann_msgs
   controller_interface
@@ -120,6 +79,13 @@ ament_export_include_directories(
   include
   lib
 )
+
+install(PROGRAMS
+  scripts/cmd_vel_to_ackermann.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+ament_python_install_package(scripts)
+
 ament_export_libraries(
   acker_diff_controller
 )
