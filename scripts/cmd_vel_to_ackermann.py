@@ -16,7 +16,7 @@ def cmd_callback(data):
   #interpreting angular Z as angle!
   steering = -data.angular.z    #translate between mathematical and locical turning direction
   #interpreting linear Z as steering velocity.
-  steering_v = abs(data.linear.z)
+  steering_v = 0.2 + abs(data.linear.z)
 
   if message_type == 'ackermann_drive':
     msg = AckermannDrive()
