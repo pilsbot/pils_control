@@ -23,8 +23,7 @@
   <build_depend>pluginlib</build_depend>
   
   <!-- for cmd vel translation -->
-  <build_depend>rospy</build_depend>
-  <exec_depend>rospy</exec_depend>
+  <exec_depend>rclpy</exec_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
   <!--  -->
 
