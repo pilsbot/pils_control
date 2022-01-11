@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>acker_diff_controller</name>
-  <version>0.1.0</version>
+  <version>0.1.1</version>
   <description>Controller for a differential drive mobile base with back axle</description>
   <maintainer email="info@pascalpieper.de">Pascal Pieper</maintainer>
 
@@ -24,7 +24,9 @@
   
   <!-- for cmd vel translation -->
   <exec_depend>rclpy</exec_depend>
-  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <exec_depend>joy</exec_depend>
+  <exec_depend>teleop_twist_joy</exec_depend>
+  <!-- <buildtool_depend>ament_cmake_python</buildtool_depend> -->
   <!--  -->
 
   <test_depend>ament_cmake_gmock</test_depend>
