@@ -208,7 +208,7 @@ controller_interface::return_type AckerDiffController::update()
 
   const double current_steering_angle = registered_steering_axle_handle_[0].get().get_value();
   if (std::isnan(current_steering_angle)) {
-    RCLCPP_ERROR_THOTTLE(logger, clock, 1000,
+    RCLCPP_ERROR_THROTTLE(logger, *node_->get_clock(), 1000,
         "Could not get current steering angle!");
     return controller_interface::return_type::ERROR;
   }
@@ -229,7 +229,7 @@ controller_interface::return_type AckerDiffController::update()
     if( (current_steering_angle >= steering_params_.max_angle && angular_correction < 0) ||
         (current_steering_angle <= steering_params_.min_angle && angular_correction > 0) ) {
       //we would oversteer into endstops
-      RCLCPP_WARN_THROTTLE(logger, clock, 1000,
+      RCLCPP_WARN_THROTTLE(logger, *node_->get_clock(), 1000,
           "Current steering angle (%lf) over configured limit (%lf - %lf)!\n"
           "Resetting PID-Controller.\n"
           "If this happens frequently, consider re-tuning the PID values.",
