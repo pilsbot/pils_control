@@ -448,7 +448,8 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
     .dt = 1,    //is set dynamically later by update rate
     .max = node_->get_parameter("angular.z.max_velocity").as_double(),
     .min = node_->get_parameter("angular.z.min_velocity").as_double(),
-    .max_dv = NAN
+    .max_dv = node_->get_parameter("angular.z.max_acceleration").as_double(),
+    .overshoot_integral_adaptation = node_->get_parameter("pid.Ki").as_double()/2
   };
 
   if(node_->get_parameter("angular.z.has_acceleration_limits").as_bool()) {

@@ -156,10 +156,7 @@ protected:
     std::array<double, 6> twist_covariance_diagonal;
   } odom_params_;
 
-  PID::Settings pid_params_ = PID::Settings{
-    .Kp = 1, .Ki = 0.5, .Kd = 0.01,
-    .dt = 1, .max = NAN, .min = NAN, .max_dv = NAN
-  };
+  PID::Settings pid_params_ = PID::getDefault();
   PID pid_controller_;
 
   Odometry odometry_;
