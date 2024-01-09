@@ -26,9 +26,10 @@
 namespace acker_diff_controller
 {
 SpeedLimiter::SpeedLimiter(
-  bool has_velocity_limits, bool has_acceleration_limits, bool has_jerk_limits, double min_velocity,
-  double max_velocity, double min_acceleration, double max_acceleration, double min_jerk,
-  double max_jerk)
+  bool has_velocity_limits, bool has_acceleration_limits, bool has_jerk_limits,
+  double min_velocity, double max_velocity,
+  double min_acceleration, double max_acceleration,
+  double min_jerk, double max_jerk)
 : has_velocity_limits_(has_velocity_limits),
   has_acceleration_limits_(has_acceleration_limits),
   has_jerk_limits_(has_jerk_limits),
@@ -74,6 +75,59 @@ SpeedLimiter::SpeedLimiter(
       min_jerk_ = -max_jerk_;
     }
   }
+}
+
+void SpeedLimiter::setVelocityLimits(const double& max_velocity, const double& min_velocity)
+{
+    if (std::isnan(max_velocity))
+    {
+      throw std::runtime_error("Cannot apply velocity limits if max_velocity is not specified");
+    }
+    max_velocity_ = max_velocity;
+    if (std::isnan(min_velocity))
+    {
+      min_velocity_ = -max_velocity;
+    }
+    else
+    {
+      min_velocity_ = min_velocity;
+    }
+}
+
+void SpeedLimiter::setAccelerationLimits(const double& max_acceleration, const double& min_acceleration)
+{
+    if (std::isnan(max_acceleration))
+    {
+      throw std::runtime_error(
+        "Cannot apply acceleration limits if max_acceleration is not specified");
+    }
+    max_acceleration_ = max_acceleration;
+    if (std::isnan(min_acceleration))
+    {
+      min_acceleration_ = -max_acceleration_;
+    }
+    else
+    {
+      min_acceleration_ = min_acceleration;
+    }
+}
+
+void SpeedLimiter::setJerkLimits(const double& max_jerk, const double& min_jerk)
+{
+    if (std::isnan(max_jerk))
+    {
+      throw std::runtime_error(
+        "Cannot apply jerk limits if max_jerk is not specified");
+    }
+    max_jerk_ = max_jerk;
+    if (std::isnan(min_jerk))
+    {
+      min_jerk_ = -max_jerk_;
+    }
+    else
+    {
+      min_jerk_ = min_jerk;
+    }
 }
 
 double SpeedLimiter::limit(double & v, double v0, double v1, double dt)

@@ -44,6 +44,12 @@ public:
     double min_acceleration = NAN, double max_acceleration = NAN, double min_jerk = NAN,
     double max_jerk = NAN);
 
+  void setVelocityLimits(const double& max_velocity, const double& min_velocity = NAN);
+
+  void setAccelerationLimits(const double& max_acceleration, const double& min_acceleration = NAN);
+
+  void setJerkLimits(const double& max_jerk, const double& min_jerk = NAN);
+
   /**
    * \brief Limit the velocity and acceleration
    * \param [in, out] v  Velocity [m/s]

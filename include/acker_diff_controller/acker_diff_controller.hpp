@@ -142,8 +142,10 @@ protected:
 
   struct SteeringParams {
     bool has_position_limit = false;
-    double max_angle = 0;
-    double min_angle = 0;
+    double max_angle = 0;       // rad
+    double min_angle = 0;       // rad
+    double max_angular_velocity = 0; // rad/s
+    double max_linear_speed = 0;// m/s
   } steering_params_;
 
   struct OdometryParams

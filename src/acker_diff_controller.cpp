@@ -1,4 +1,4 @@
-// Copyright 2020 PAL Robotics S.L.
+// Copyright 2022
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 /*
- * Author: Bence Magyar, Enrique Fernández, Manuel Meraz
+ * Author: Pascal Pieper
  */
 
 #include <memory>
@@ -102,6 +102,7 @@ controller_interface::return_type AckerDiffController::init(const std::string & 
     auto_declare<bool>("angle.z.has_position_limits", false);
     auto_declare<double>("angle.z.max_angle", NAN);
     auto_declare<double>("angle.z.min_angle", NAN);
+    auto_declare<double>("angle.z.max_angular_velocity", NAN);
 
     auto_declare<bool>("angular.z.has_velocity_limits", false);
     auto_declare<bool>("angular.z.has_acceleration_limits", false);
@@ -196,9 +197,21 @@ controller_interface::return_type AckerDiffController::update()
 
   auto & last_command = previous_commands_.back().drive;
   auto & second_to_last_command = previous_commands_.front().drive;
-  limiter_linear_.limit(
-    linear_command, last_command.speed, second_to_last_command.speed, update_dt.seconds());
-  limiter_angle_.limit_velocity(angle_command); // actually limits position here, lol
+  /// 1.0 if not limited, 'less than' else
+  auto linear_limit_ratio = limiter_linear_.limit(
+    linear_command, last_command.speed, second_to_last_command.speed,
+    update_dt.seconds());
+
+  // actually limits position and velocity here, lol
+  auto angle_limited = limiter_angle_.limit(
+    angle_command, last_command.steering_angle, second_to_last_command.steering_angle,
+    update_dt.seconds());
+
+  // TODO: limit angular velocity with limiter_angle_ based on angular_command
+  // Problem: So what it would normally do, if we wouldn't misuse it.
+
+  RCLCPP_DEBUG(logger, "linear limit ratio: %lf, angle_limit ratio: %lf", linear_limit_ratio, angle_limited);
+
   limiter_angular_.limit(
     angular_command, last_command.steering_angle_velocity, second_to_last_command.steering_angle_velocity, update_dt.seconds());
   previous_commands_.pop();
@@ -248,7 +261,8 @@ controller_interface::return_type AckerDiffController::update()
   if(std::abs(angular_correction) > angular_command) {
     linear_command = 0;
     RCLCPP_DEBUG(logger,
-        "Difference too big! Stopping linear motion."
+        "Difference angular_correction '%lf' vs angular_command '%lf' too big! "
+        "Stopping linear motion.", std::abs(angular_correction), angular_command
     );
   }
 
@@ -405,7 +419,8 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
   steering_params_ = SteeringParams {
       .has_position_limit = node_->get_parameter("angle.z.has_position_limits").as_bool(),
       .max_angle = node_->get_parameter("angle.z.max_angle").as_double(),
-      .min_angle = node_->get_parameter("angle.z.min_angle").as_double()
+      .min_angle = node_->get_parameter("angle.z.min_angle").as_double(),
+      .max_angular_velocity = node_->get_parameter("angle.z.max_angular_velocity").as_double(),
   };
   if(steering_params_.has_position_limit && isnan(steering_params_.min_angle)) {
     steering_params_.min_angle = -steering_params_.max_angle;
@@ -414,12 +429,14 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
   {
     limiter_angle_ = SpeedLimiter(
       steering_params_.has_position_limit,
-      false, false,
+      !std::isnan(steering_params_.max_angular_velocity), false,
       steering_params_.min_angle,
-      steering_params_.max_angle);
+      steering_params_.max_angle,
+      NAN, steering_params_.max_angular_velocity);
   }
   catch (const std::runtime_error & e)
   {
+    RCLCPP_ERROR(node_->get_logger(), "max_angular_velocity: %lf", steering_params_.max_angular_velocity);
     RCLCPP_ERROR(node_->get_logger(), "Error configuring steering angle limiter: %s", e.what());
   }
 
