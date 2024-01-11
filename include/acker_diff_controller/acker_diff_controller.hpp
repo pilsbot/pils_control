@@ -146,6 +146,7 @@ protected:
     double min_angle = 0;       // rad
     double max_angular_velocity = 0; // rad/s
     double max_linear_speed = 0;// m/s
+    double limit_linear_at_angle_diff_to_setpoint = 0; // rad
   } steering_params_;
 
   struct OdometryParams
@@ -160,7 +161,8 @@ protected:
 
   PID::Settings pid_params_ = PID::Settings{
     .Kp = 1, .Ki = 0.5, .Kd = 0.01,
-    .dt = 1, .max = NAN, .min = NAN, .max_dv = NAN
+    .dt = 1, .max = NAN, .min = NAN,
+    .max_dv = NAN, .overshoot_integral_adaptation = NAN
   };
   PID pid_controller_;
 
