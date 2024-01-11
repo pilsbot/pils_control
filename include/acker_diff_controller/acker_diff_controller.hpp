@@ -196,6 +196,7 @@ protected:
   std::shared_ptr<realtime_tools::RealtimePublisher<AckermannStamped>> realtime_limited_command_publisher_ =
     nullptr;
 
+  rclcpp::Clock clock_{RCL_STEADY_TIME};
   rclcpp::Time previous_update_timestamp_{0};
 
   bool is_halted = false;

@@ -25,6 +25,7 @@
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 #include "rclcpp/logging.hpp"
+#include "rclcpp/clock.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 
 #include "acker_diff_controller/acker_diff_controller.hpp"
@@ -168,7 +169,6 @@ controller_interface::return_type AckerDiffController::update()
     return controller_interface::return_type::OK;
   }
 
-  const auto current_time = node_->get_clock()->now();
 
   std::shared_ptr<AckermannStamped> last_msg;
   received_command_msg_ptr_.get(last_msg);
@@ -179,9 +179,10 @@ controller_interface::return_type AckerDiffController::update()
     return controller_interface::return_type::ERROR;
   }
 
-  const auto dt = current_time - last_msg->header.stamp;
+  // this is a different time source than the steady clock `clock_`
+  const auto message_dt = node_->get_clock()->now() - last_msg->header.stamp;
   // Brake if cmd_vel has timed out, override the stored command
-  if (dt > cmd_vel_timeout_)
+  if (message_dt > cmd_vel_timeout_)
   {
     last_msg->drive.speed = 0;
     last_msg->drive.steering_angle_velocity = 0;
@@ -192,6 +193,7 @@ controller_interface::return_type AckerDiffController::update()
   double angle_command = last_msg->drive.steering_angle;
   double angular_command = last_msg->drive.steering_angle_velocity;
 
+  const auto current_time = clock_.now();
   const auto update_dt = current_time - previous_update_timestamp_;
   previous_update_timestamp_ = current_time;
 
@@ -229,14 +231,20 @@ controller_interface::return_type AckerDiffController::update()
   double angular_correction = 0;
   // PID controller
   if(angular_command > 0) {     // if steering angle velocity = 0, dont regulate
-    if(last_command.steering_angle_velocity == 0) {
+    if(last_command.steering_angle_velocity == 0)
+    {
       // we transitioned from passive to active steering, reset PID
       pid_controller_ = PID();
     }
+
     pid_params_.dt = update_dt.seconds();
     // negative feedback, because sensor is not mathematically but logically oriented
     angular_correction =
         -pid_controller_.calculate(angle_command, current_steering_angle, pid_params_);
+
+    // PID OPTIMIZER DEBUG
+    // RCLCPP_INFO(logger, "PID: p %lf i %lf d %lf", pid_params_.Kp, pid_params_.Ki, pid_params_.Kd);
+    // RCLCPP_INFO(logger, "PID: max %lf min %lf max_dv %lf", pid_params_.max, pid_params_.min, pid_params_.max_dv);
 
     // check for significant controller overshoot on maximum angle for safety
     if( (current_steering_angle >= steering_params_.max_angle && angular_correction < 0) ||
@@ -251,9 +259,8 @@ controller_interface::return_type AckerDiffController::update()
       pid_controller_ = PID();  // resets internals
     }
 
-    RCLCPP_DEBUG(logger,
-        "Angle error: %lf\n"
-        "correction: %lf", (angle_command - current_steering_angle), angular_correction
+    RCLCPP_INFO(logger,
+        "Angle error: '%0.4lf', correction: %0.4lf", (angle_command - current_steering_angle), angular_correction
     );
   }
 
@@ -574,7 +581,7 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
   odometry_transform_message.transforms.front().header.frame_id = odom_params_.odom_frame_id;
   odometry_transform_message.transforms.front().child_frame_id = odom_params_.base_frame_id;
 
-  previous_update_timestamp_ = node_->get_clock()->now();
+  previous_update_timestamp_ = clock_.now();
   return CallbackReturn::SUCCESS;
 }
 
