@@ -5,7 +5,6 @@
 import sys
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSReliabilityPolicy
 from rclpy.qos import QoSProfile
 from geometry_msgs.msg import Twist
 from ackermann_msgs.msg import AckermannDriveStamped
@@ -25,14 +24,14 @@ def cmd_callback(data):
     msg.speed = v
     pub.publish(msg)
 
-  else:    
+  else:
     msg = AckermannDriveStamped()
     msg.header.stamp = node.get_clock().now().to_msg()
     msg.header.frame_id = frame_id
     msg.drive.steering_angle = steering
     msg.drive.steering_angle_velocity = steering_v
     msg.drive.speed = v
-    
+
     pub.publish(msg)
 
 def main(args=None):
@@ -46,13 +45,13 @@ def main(args=None):
 
     node = rclpy.create_node('cmd_vel_to_ackermann_drive')
 
-    twist_cmd_topic = node.declare_parameter('twist_cmd_topic', '/cmd_vel').value 
+    twist_cmd_topic = node.declare_parameter('twist_cmd_topic', '/cmd_vel').value
     ackermann_cmd_topic = node.declare_parameter('ackermann_cmd_topic', '/ackermann_cmd').value
     frame_id = node.declare_parameter('frame_id', 'odom').value
      # ackermann_drive or ackermann_drive_stamped
     message_type = node.declare_parameter('message_type', 'ackermann_drive_stamped').value
 
-    qos = QoSProfile(depth=1) 
+    qos = QoSProfile(depth=1)
     sub = node.create_subscription(Twist, twist_cmd_topic, cmd_callback, qos_profile=qos)
     if message_type == 'ackermann_drive':
       pub = node.create_publisher(AckermannDrive, ackermann_cmd_topic, qos_profile=qos)

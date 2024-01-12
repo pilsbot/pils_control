@@ -233,11 +233,6 @@ controller_interface::return_type AckerDiffController::update()
         -pid_controller_.calculate(angle_command, current_steering_angle,
                                    update_dt.seconds(), current_pid_params);
 
-    // PID OPTIMIZING DEBUG
-    // RCLCPP_INFO(logger, "PID: p %.4lf i %.4lf d %.4lf", pid_params_.Kp, pid_params_.Ki, pid_params_.Kd);
-    // RCLCPP_INFO(logger, "PID: max %.4lf min %.4lf max_dv %.4lf", pid_params_.max, pid_params_.min, pid_params_.max_dv);
-    // RCLCPP_INFO(logger, "PID: oIa %.4lf", pid_params_.overshoot_integral_adaptation);
-
     // check for significant controller overshoot on maximum angle for safety
     if( (current_steering_angle >= steering_params_.max_angle && angular_correction < 0) ||
         (current_steering_angle <= steering_params_.min_angle && angular_correction > 0) ) {
@@ -251,9 +246,13 @@ controller_interface::return_type AckerDiffController::update()
       pid_controller_ = PID();  // resets internals
     }
 
-    RCLCPP_DEBUG(logger,
-        "Angle error: '%0.4lf', correction: %0.4lf", (angle_command - current_steering_angle), angular_correction
-    );
+    // // PID OPTIMIZING DEBUG
+    // RCLCPP_INFO(logger, "PID: p %.4lf i %.4lf d %.4lf", pid_params_.Kp, pid_params_.Ki, pid_params_.Kd);
+    // RCLCPP_INFO(logger, "PID: max %.4lf min %.4lf max_dv %.4lf", pid_params_.max, pid_params_.min, pid_params_.max_dv);
+    // RCLCPP_INFO(logger, "PID: oIa %.4lf", pid_params_.overshoot_integral_adaptation);
+    // RCLCPP_INFO(logger,
+    //     "Angle error: '%0.4lf', correction: %0.4lf", (angle_command - current_steering_angle), angular_correction
+    // );
   }
 
   // logic that reduces linear speed if error is too big
@@ -455,6 +454,10 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
     .max_dv = steering_params_.max_angular_acceleration,
     .overshoot_integral_adaptation = node_->get_parameter("pid.oIa").as_double(),
   };
+
+  RCLCPP_INFO(logger, "PID: p %.4lf i %.4lf d %.4lf", pid_params_.Kp, pid_params_.Ki, pid_params_.Kd);
+  RCLCPP_INFO(logger, "PID: max %.4lf min %.4lf max_dv %.4lf", pid_params_.max, pid_params_.min, pid_params_.max_dv);
+  RCLCPP_INFO(logger, "PID: oIa %.4lf", pid_params_.overshoot_integral_adaptation);
 
   if (!reset())
   {
