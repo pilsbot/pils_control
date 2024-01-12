@@ -144,8 +144,8 @@ protected:
     bool has_position_limit = false;
     double max_angle = 0;       // rad
     double min_angle = 0;       // rad
-    double max_angular_velocity = 0; // rad/s
-    double max_linear_speed = 0;// m/s
+    double max_angular_velocity = 0;    // rad/s
+    double max_angular_acceleration = 0;// rad/s^2
     double limit_linear_at_angle_diff_to_setpoint = 0; // rad
   } steering_params_;
 
@@ -161,7 +161,7 @@ protected:
 
   PID::Settings pid_params_ = PID::Settings{
     .Kp = 1, .Ki = 0.5, .Kd = 0.01,
-    .dt = 1, .max = NAN, .min = NAN,
+    .max = NAN, .min = NAN,
     .max_dv = NAN, .overshoot_integral_adaptation = NAN
   };
   PID pid_controller_;
@@ -191,7 +191,6 @@ protected:
   // speed limiters
   SpeedLimiter limiter_linear_;
   SpeedLimiter limiter_angle_;
-  SpeedLimiter limiter_angular_;
 
   bool publish_limited_velocity_ = false;
   std::shared_ptr<rclcpp::Publisher<AckermannStamped>> limited_command_publisher_ = nullptr;

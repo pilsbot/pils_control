@@ -91,31 +91,22 @@ controller_interface::return_type AckerDiffController::init(const std::string & 
     auto_declare<int>("velocity_rolling_window_size", 10);
     auto_declare<bool>("use_stamped_vel", use_stamped_vel_);
 
-    auto_declare<bool>("linear.x.has_velocity_limits", false);
-    auto_declare<bool>("linear.x.has_acceleration_limits", false);
-    auto_declare<bool>("linear.x.has_jerk_limits", false);
+    auto_declare<bool>  ("linear.x.has_velocity_limits", false);
+    auto_declare<bool>  ("linear.x.has_acceleration_limits", false);
+    auto_declare<bool>  ("linear.x.has_jerk_limits", false);
     auto_declare<double>("linear.x.max_velocity", NAN);
     auto_declare<double>("linear.x.min_velocity", NAN);
     auto_declare<double>("linear.x.max_acceleration", NAN);
     auto_declare<double>("linear.x.min_acceleration", NAN);
-    auto_declare<double>("linear.x.max_jerk", NAN);
     auto_declare<double>("linear.x.min_jerk", NAN);
+    auto_declare<double>("linear.x.max_jerk", NAN);
 
-    auto_declare<bool>("angle.z.has_position_limits", false);
-    auto_declare<double>("angle.z.max_angle", NAN);
+    auto_declare<bool>  ("angle.z.has_position_limits", true);
+    auto_declare<double>("angle.z.max_angle", 1.14);  // about 90 degrees
     auto_declare<double>("angle.z.min_angle", NAN);
-    auto_declare<double>("angle.z.max_angular_velocity", NAN);
+    auto_declare<double>("angle.z.max_angular_velocity", 1.);
+    auto_declare<double>("angle.z.max_angular_acceleration", 6.);
     auto_declare<double>("angle.z.max_angle_setpoint_diff", .85); // about 50 degrees
-
-    auto_declare<bool>("angular.z.has_velocity_limits", false);
-    auto_declare<bool>("angular.z.has_acceleration_limits", false);
-    auto_declare<bool>("angular.z.has_jerk_limits", false);
-    auto_declare<double>("angular.z.max_velocity", NAN);
-    auto_declare<double>("angular.z.min_velocity", NAN);
-    auto_declare<double>("angular.z.max_acceleration", pid_params_.max_dv);
-    auto_declare<double>("angular.z.min_acceleration", NAN);
-    auto_declare<double>("angular.z.max_jerk", NAN);
-    auto_declare<double>("angular.z.min_jerk", NAN);
   }
   catch (const std::exception & e)
   {
@@ -193,7 +184,8 @@ controller_interface::return_type AckerDiffController::update()
   // linear_command and angular_command may be limited further by SpeedLimit,
   double linear_command = last_msg->drive.speed;
   double angle_command = last_msg->drive.steering_angle;
-  double angular_command = last_msg->drive.steering_angle_velocity;
+  //angular is considered in the direction of steering error
+  const double angular_command = std::abs(last_msg->drive.steering_angle_velocity);
 
   const auto current_time = clock_.now();
   const auto update_dt = current_time - previous_update_timestamp_;
@@ -201,27 +193,19 @@ controller_interface::return_type AckerDiffController::update()
 
   auto & last_command = previous_commands_.back().drive;
   auto & second_to_last_command = previous_commands_.front().drive;
-  /// 1.0 if not limited, 'less than' else
-  auto linear_limit_ratio = limiter_linear_.limit(
+
+  // limit linear command
+  limiter_linear_.limit(
     linear_command, last_command.speed, second_to_last_command.speed,
     update_dt.seconds());
 
-  // actually limits position and velocity here, lol
-  auto angle_limited = limiter_angle_.limit(
+  // limit angle command
+  limiter_angle_.limit(
     angle_command, last_command.steering_angle, second_to_last_command.steering_angle,
     update_dt.seconds());
 
-  // TODO: limit angular velocity with limiter_angle_ based on angular_command
-  // Problem: So what it would normally do, if we wouldn't misuse it.
-
-  RCLCPP_DEBUG(logger, "linear limit ratio: %lf, angle_limit ratio: %lf", linear_limit_ratio, angle_limited);
-
-  limiter_angular_.limit(
-    angular_command, last_command.steering_angle_velocity, second_to_last_command.steering_angle_velocity, update_dt.seconds());
   previous_commands_.pop();
   previous_commands_.emplace(*last_msg);
-  angular_command = std::abs(angular_command);  //angular is considered in the direction of steering error
-
 
   const double current_steering_angle = registered_steering_axle_handle_[0].get().get_value();
   if (std::isnan(current_steering_angle)) {
@@ -232,19 +216,24 @@ controller_interface::return_type AckerDiffController::update()
 
   double angular_correction = 0;
   // PID controller
-  if(angular_command > 0) {     // if steering angle velocity = 0, dont regulate
+  if(angular_command > 0) {
+     // only regulate when allowed angular velocity is > 0
     if(last_command.steering_angle_velocity == 0)
     {
       // we transitioned from passive to active steering, reset PID
       pid_controller_ = PID();
     }
-    // TODO: use `angular_command` as actually rad/s in PID controller.
-    pid_params_.dt = update_dt.seconds();
+    auto current_pid_params = pid_params_;  // local copy to modify
+    // this limits the max angular correction to the requested steering_angle_velocity
+    current_pid_params.max = std::min(pid_params_.max, angular_command);
+    current_pid_params.min = -current_pid_params.max;
+
     // negative feedback, because sensor is not mathematically but logically oriented
     angular_correction =
-        -pid_controller_.calculate(angle_command, current_steering_angle, pid_params_);
+        -pid_controller_.calculate(angle_command, current_steering_angle,
+                                   update_dt.seconds(), current_pid_params);
 
-    // PID OPTIMIZER DEBUG
+    // PID OPTIMIZING DEBUG
     // RCLCPP_INFO(logger, "PID: p %.4lf i %.4lf d %.4lf", pid_params_.Kp, pid_params_.Ki, pid_params_.Kd);
     // RCLCPP_INFO(logger, "PID: max %.4lf min %.4lf max_dv %.4lf", pid_params_.max, pid_params_.min, pid_params_.max_dv);
     // RCLCPP_INFO(logger, "PID: oIa %.4lf", pid_params_.overshoot_integral_adaptation);
@@ -276,8 +265,7 @@ controller_interface::return_type AckerDiffController::update()
     );
   }
 
-  // limit linear acceleration and angular speed
-  limiter_angular_.limit_velocity(angular_correction);
+  // limit linear acceleration
   limiter_linear_.limit_velocity(linear_command);  // only needed if logic earlier would also increase speed
   limiter_linear_.limit_acceleration(
       linear_command, last_limited_linear_command_, update_dt.seconds());
@@ -435,6 +423,8 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
         node_->get_parameter("angle.z.min_angle").as_double(),
       .max_angular_velocity =
         node_->get_parameter("angle.z.max_angular_velocity").as_double(),
+      .max_angular_acceleration =
+        node_->get_parameter("angle.z.max_angular_acceleration").as_double(),
       .limit_linear_at_angle_diff_to_setpoint =
         node_->get_parameter("angle.z.max_angle_setpoint_diff").as_double(),
   };
@@ -456,38 +446,15 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
     RCLCPP_ERROR(node_->get_logger(), "Error configuring steering angle limiter: %s", e.what());
   }
 
-  try
-  {
-    limiter_angular_ = SpeedLimiter(
-      node_->get_parameter("angular.z.has_velocity_limits").as_bool(),
-      node_->get_parameter("angular.z.has_acceleration_limits").as_bool(),
-      node_->get_parameter("angular.z.has_jerk_limits").as_bool(),
-      node_->get_parameter("angular.z.min_velocity").as_double(),
-      node_->get_parameter("angular.z.max_velocity").as_double(),
-      node_->get_parameter("angular.z.min_acceleration").as_double(),
-      node_->get_parameter("angular.z.max_acceleration").as_double(),
-      node_->get_parameter("angular.z.min_jerk").as_double(),
-      node_->get_parameter("angular.z.max_jerk").as_double());
-  }
-  catch (const std::runtime_error & e)
-  {
-    RCLCPP_ERROR(node_->get_logger(), "Error configuring angular speed limiter: %s", e.what());
-  }
-
   pid_params_ = PID::Settings{
     .Kp = node_->get_parameter("pid.Kp").as_double(),
     .Ki = node_->get_parameter("pid.Ki").as_double(),
     .Kd = node_->get_parameter("pid.Kd").as_double(),
-    .dt = 1,    //is set dynamically later by update rate
-    .max = node_->get_parameter("angular.z.max_velocity").as_double(),
-    .min = node_->get_parameter("angular.z.min_velocity").as_double(),
-    .max_dv = NAN,
+    .max = steering_params_.max_angular_velocity,
+    .min = -steering_params_.max_angular_velocity,
+    .max_dv = steering_params_.max_angular_acceleration,
     .overshoot_integral_adaptation = node_->get_parameter("pid.oIa").as_double(),
   };
-
-  if(node_->get_parameter("angular.z.has_acceleration_limits").as_bool()) {
-    pid_params_.max_dv = node_->get_parameter("angular.z.max_acceleration").as_double();
-  }
 
   if (!reset())
   {
