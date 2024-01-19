@@ -181,22 +181,6 @@ controller_interface::return_type AckerDiffController::update()
     last_msg->drive.steering_angle_velocity = 0;
   }
 
-
-  // TODO: FIXME WIRKLICH HÄSSLICH
-  bool is_zero_speed = last_msg->drive.speed == 0;
-  static auto last_non_zero_time = node_->get_clock()->now();
-  if(!is_zero_speed)
-    last_non_zero_time = node_->get_clock()->now();
-  else
-  {
-	// todo timeout
-	if(node_->get_clock()->now() - last_non_zero_time <  std::chrono::milliseconds{400})
-	{
-		// use last msg
-		last_msg->drive = previous_commands_.back().drive;
-  	}
-  }
-
   // linear_command and angular_command may be limited further by SpeedLimit,
   double linear_command = last_msg->drive.speed;
   double angle_command = last_msg->drive.steering_angle;
