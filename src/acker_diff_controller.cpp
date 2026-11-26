@@ -181,126 +181,75 @@ controller_interface::return_type AckerDiffController::update()
     last_msg->drive.steering_angle_velocity = 0;
   }
 
-  // linear_command and angular_command may be limited further by SpeedLimit,
-  double linear_command = last_msg->drive.speed;
-  double angle_command = last_msg->drive.steering_angle;
-  //angular is considered in the direction of steering error
-  const double angular_command = std::abs(last_msg->drive.steering_angle_velocity);
-
   const auto current_time = clock_.now();
   const auto update_dt = current_time - previous_update_timestamp_;
   previous_update_timestamp_ = current_time;
 
-  auto & last_command = previous_commands_.back().drive;
-  auto & second_to_last_command = previous_commands_.front().drive;
+  AckerDiffCore::Measurement measurement{
+    registered_steering_axle_handle_[0].get().get_value(), WheelPair{0.0, 0.0}};
+  if (!odom_params_.open_loop)
+  {
+    for (size_t index = 0; index < wheel_params_.wheels_per_side; ++index)
+    {
+      measurement.wheel_position.left +=
+        registered_left_wheel_handles_[index].position.get().get_value();
+      measurement.wheel_position.right +=
+        registered_right_wheel_handles_[index].position.get().get_value();
+    }
+    measurement.wheel_position.left /= wheel_params_.wheels_per_side;
+    measurement.wheel_position.right /= wheel_params_.wheels_per_side;
+  }
 
-  // limit linear command
-  limiter_linear_.limit(
-    linear_command, last_command.speed, second_to_last_command.speed,
-    update_dt.seconds());
+  const AckerCommand command{
+    last_msg->drive.speed, last_msg->drive.steering_angle,
+    last_msg->drive.steering_angle_velocity};
+  const auto out = core_.step(command, measurement, update_dt.seconds(), current_time.seconds());
 
-  // limit angle command
-  limiter_angle_.limit(
-    angle_command, last_command.steering_angle, second_to_last_command.steering_angle,
-    update_dt.seconds());
-
-  previous_commands_.pop();
-  previous_commands_.emplace(*last_msg);
-
-  const double current_steering_angle = registered_steering_axle_handle_[0].get().get_value();
-  if (std::isnan(current_steering_angle)) {
+  if (out.status == AckerDiffCore::Status::invalid_steering_angle) {
     RCLCPP_ERROR_THROTTLE(logger, *node_->get_clock(), 1000,
         "Could not get current steering angle!");
     return controller_interface::return_type::ERROR;
   }
 
-  double angular_correction = 0;
-  // PID controller
-  if(angular_command > 0) {
-     // only regulate when allowed angular velocity is > 0
-    if(last_command.steering_angle_velocity == 0)
-    {
-      // we transitioned from passive to active steering, reset PID
-      pid_controller_ = PID();
-    }
-    auto current_pid_params = pid_params_;  // local copy to modify
-    // this limits the max angular correction to the requested steering_angle_velocity
-    current_pid_params.max = std::min(pid_params_.max, angular_command);
-    current_pid_params.min = -current_pid_params.max;
-
-    // negative feedback, because sensor is not mathematically but logically oriented
-    angular_correction =
-        -pid_controller_.calculate(angle_command, current_steering_angle,
-                                   update_dt.seconds(), current_pid_params);
-
-    // check for significant controller overshoot on maximum angle for safety
-    if( (current_steering_angle >= steering_params_.max_angle && angular_correction < 0) ||
-        (current_steering_angle <= steering_params_.min_angle && angular_correction > 0) ) {
-      //we would oversteer into endstops
-      RCLCPP_WARN_THROTTLE(logger, *node_->get_clock(), 1000,
-          "Current steering angle (%lf) over configured limit (%lf - %lf)!\n"
-          "Resetting PID-Controller.\n"
-          "If this happens frequently, consider re-tuning the PID values.",
-          current_steering_angle, steering_params_.min_angle, steering_params_.max_angle);
-      angular_correction = 0;
-      pid_controller_ = PID();  // resets internals
-    }
-
-    // // PID OPTIMIZING DEBUG
-    // RCLCPP_INFO(logger, "PID: p %.4lf i %.4lf d %.4lf", pid_params_.Kp, pid_params_.Ki, pid_params_.Kd);
-    // RCLCPP_INFO(logger, "PID: max %.4lf min %.4lf max_dv %.4lf", pid_params_.max, pid_params_.min, pid_params_.max_dv);
-    // RCLCPP_INFO(logger, "PID: oIa %.4lf", pid_params_.overshoot_integral_adaptation);
-    // RCLCPP_INFO(logger,
-    //     "Angle error: '%0.4lf', correction: %0.4lf", (angle_command - current_steering_angle), angular_correction
-    // );
+  if (out.steering_limit_reset) {
+    RCLCPP_WARN_THROTTLE(logger, *node_->get_clock(), 1000,
+        "Current steering angle (%lf) over configured limit (%lf - %lf)!\n"
+        "Resetting PID-Controller.\n"
+        "If this happens frequently, consider re-tuning the PID values.",
+        measurement.steering_angle, steering_params_.min_angle, steering_params_.max_angle);
   }
-
-  // logic that reduces linear speed if error is too big
-  if(std::abs(angular_correction) > steering_params_.limit_linear_at_angle_diff_to_setpoint) {
-    linear_command = 0;
+  if (out.linear_stopped) {
     RCLCPP_DEBUG(logger,
         "Difference angular_correction '%lf' vs angular_command '%lf' too big! "
-        "Stopping linear motion.", std::abs(angular_correction), angular_command
+        "Stopping linear motion.", std::abs(out.angular_correction),
+        out.limited_command.steering_angle_velocity
     );
   }
 
-  // limit linear acceleration
-  limiter_linear_.limit_velocity(linear_command);  // only needed if logic earlier would also increase speed
-  limiter_linear_.limit_acceleration(
-      linear_command, last_limited_linear_command_, update_dt.seconds());
-
   //    Publish limited velocity
-  last_limited_linear_command_ = linear_command;
   if (publish_limited_velocity_ && realtime_limited_command_publisher_->trylock())
   {
     auto & limited_velocity_command = realtime_limited_command_publisher_->msg_;
     limited_velocity_command.header.stamp = current_time;
-    limited_velocity_command.drive.speed = linear_command;
-    limited_velocity_command.drive.steering_angle = angle_command;
-    limited_velocity_command.drive.steering_angle_velocity = angular_command;
+    limited_velocity_command.drive.speed = out.limited_command.speed;
+    limited_velocity_command.drive.steering_angle = out.limited_command.steering_angle;
+    limited_velocity_command.drive.steering_angle_velocity =
+      out.limited_command.steering_angle_velocity;
     realtime_limited_command_publisher_->unlockAndPublish();
   }
 
-  WheelSpeeds linear_speed{linear_command, linear_command};
-
-  //TODO: magic value where turning angle is so small that different speeds are not needed
-  const double min_abs_turning_angle_for_ackermann = 0.05;
-  if(std::abs(angle_command) > min_abs_turning_angle_for_ackermann) {
-    linear_speed = calc_turning_speeds(linear_command, angle_command);
-  }
-
-  WheelTurningRate final_turning_rate = mix_linear_and_angular(linear_speed, angular_correction);
-
-  // odometry updates
-  if(!update_odometry(final_turning_rate, current_time)) {
+  if (out.status == AckerDiffCore::Status::invalid_wheel_position) {
+    RCLCPP_ERROR(node_->get_logger(), "Either the left or right wheel position is invalid");
     return controller_interface::return_type::ERROR;
   }
+
+  publish_odometry(current_time);
 
   // Set wheels turning rates:
   for (size_t index = 0; index < wheel_params_.wheels_per_side; ++index)
   {
-    registered_left_wheel_handles_[index].velocity.get().set_value(final_turning_rate.left);
-    registered_right_wheel_handles_[index].velocity.get().set_value(final_turning_rate.right);
+    registered_left_wheel_handles_[index].velocity.get().set_value(out.wheel_rates.left);
+    registered_right_wheel_handles_[index].velocity.get().set_value(out.wheel_rates.right);
   }
 
   return controller_interface::return_type::OK;
@@ -366,15 +315,8 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
   wheel_params_.right_radius_multiplier =
     node_->get_parameter("right_wheel_radius_multiplier").as_double();
 
-  const auto wheels = wheel_params_;
-
-  const double wheel_separation = wheels.separation_multiplier * wheels.separation;
-  const double left_wheel_radius = wheels.left_radius_multiplier * wheels.radius;
-  const double right_wheel_radius = wheels.right_radius_multiplier * wheels.radius;
-
-  odometry_.setWheelParams(wheel_separation, left_wheel_radius, right_wheel_radius);
-  odometry_.setVelocityRollingWindowSize(
-    node_->get_parameter("velocity_rolling_window_size").as_int());
+  velocity_rolling_window_size_ =
+    static_cast<size_t>(node_->get_parameter("velocity_rolling_window_size").as_int());
 
   odom_params_.odom_frame_id = node_->get_parameter("odom_frame_id").as_string();
   odom_params_.base_frame_id = node_->get_parameter("base_frame_id").as_string();
@@ -459,6 +401,14 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
   RCLCPP_INFO(logger, "PID: max %.4lf min %.4lf max_dv %.4lf", pid_params_.max, pid_params_.min, pid_params_.max_dv);
   RCLCPP_INFO(logger, "PID: oIa %.4lf", pid_params_.overshoot_integral_adaptation);
 
+  core_.configure(AckerDiffCore::Config{
+    WheelGeometry{
+      wheel_params_.separation, wheel_params_.radius, wheel_params_.wheelbase,
+      wheel_params_.separation_multiplier, wheel_params_.left_radius_multiplier,
+      wheel_params_.right_radius_multiplier},
+    steering_params_, pid_params_, limiter_linear_, limiter_angle_,
+    odom_params_.open_loop, velocity_rolling_window_size_});
+
   if (!reset())
   {
     return CallbackReturn::ERROR;
@@ -478,9 +428,6 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
   const AckermannStamped empty_cmd;
   received_command_msg_ptr_.set(std::make_shared<AckermannStamped>(empty_cmd));
 
-  // Fill last two commands with default constructed commands
-  previous_commands_.emplace(empty_cmd);
-  previous_commands_.emplace(empty_cmd);
 
   // initialize command subscriber
   if (use_stamped_vel_)
@@ -629,18 +576,11 @@ CallbackReturn AckerDiffController::on_error(const rclcpp_lifecycle::State &)
 
 bool AckerDiffController::reset()
 {
-  odometry_.resetOdometry();
-  pid_controller_ = PID();
-
-  // release the old queue
-  std::queue<AckermannStamped> empty;
-  std::swap(previous_commands_, empty);
+  core_.reset();
 
   registered_left_wheel_handles_.clear();
   registered_right_wheel_handles_.clear();
   registered_steering_axle_handle_.clear();
-
-  last_limited_linear_command_ = 0;
 
   subscriber_is_active_ = false;
   command_subscriber_.reset();
@@ -665,7 +605,7 @@ void AckerDiffController::halt()
     }
   };
 
-  last_limited_linear_command_ = 0;
+  core_.halt();
 
   halt_wheels(registered_left_wheel_handles_);
   halt_wheels(registered_right_wheel_handles_);
@@ -748,113 +688,9 @@ CallbackReturn AckerDiffController::configure_steering_angle(std::string & name,
   return CallbackReturn::SUCCESS;
 }
 
-AckerDiffController::WheelSpeeds AckerDiffController::calc_turning_speeds(
-    const double linear_speed, const double turning_angle) {
-  WheelSpeeds ret{linear_speed, linear_speed};
-  if (turning_angle == 0) {
-    RCLCPP_WARN(node_->get_logger(), "calc_turning_speeds: Turning angle is zero!");
-    return ret;
-  }
-
-  // get perhaps updated config
-  const double wheel_separation = wheel_params_.separation_multiplier * wheel_params_.separation;
-  const double wheel_base_distance = wheel_params_.wheelbase;
-
-  auto abs_alpha = M_PI_2 - std::abs(turning_angle);
-  auto turning_radius = wheel_base_distance / cos(abs_alpha);
-
-
-  ret.left = (turning_radius + wheel_separation/2.0) * atan(linear_speed / turning_radius);
-  ret.right = (turning_radius - wheel_separation/2.0) * atan(linear_speed / turning_radius);
-
-  if(turning_angle < 0)
-    std::swap(ret.left, ret.right);
-
-  RCLCPP_DEBUG(node_->get_logger(),
-      "\n\tlinear_part_left : %lf = (%lf + %lf/2) * atan(%lf / %lf)"
-      "\n\tlinear_part_right: %lf = (%lf - %lf/2) * %lf",
-      ret.left, turning_radius, wheel_separation, linear_speed, turning_radius,
-      ret.right, turning_radius, wheel_separation, atan(linear_speed / turning_radius)
-  );
-
-  return ret;
-}
-
-AckerDiffController::WheelSpeeds AckerDiffController::mix_linear_and_angular(
-    const AckerDiffController::WheelSpeeds& linear, const double angular_speed) {
-  // get perhaps updated config
-  const double wheel_separation =
-      wheel_params_.separation_multiplier * wheel_params_.separation;
-  const double left_wheel_radius =
-      wheel_params_.left_radius_multiplier * wheel_params_.radius;
-  const double right_wheel_radius =
-      wheel_params_.right_radius_multiplier * wheel_params_.radius;
-
-  WheelSpeeds ret {
-    (linear.left - angular_speed * wheel_separation / 2.0) / left_wheel_radius,
-    (linear.right + angular_speed * wheel_separation / 2.0) / right_wheel_radius
-  };
-
-  RCLCPP_DEBUG(node_->get_logger(),
-     "Velocity left: %lf = (%lf - %lf * %lf / 2.0) / %lf",
-      ret.left, linear.left , angular_speed, wheel_separation, left_wheel_radius);
-
-  return ret;
-}
-
-bool AckerDiffController::update_odometry(
-    const AckerDiffController::WheelTurningRate& set_turning_rate,
-    const rclcpp::Time& current_time) {
-
-  if (odom_params_.open_loop)
-  {
-    // get perhaps updated config
-    const double wheel_separation =
-        wheel_params_.separation_multiplier * wheel_params_.separation;
-    const double left_wheel_radius =
-        wheel_params_.left_radius_multiplier * wheel_params_.radius;
-    const double right_wheel_radius =
-        wheel_params_.right_radius_multiplier * wheel_params_.radius;
-
-    //back-calculate wheel turning rates to linear/angular proportions
-    WheelSpeeds set_velocity = {.left = set_turning_rate.left * left_wheel_radius,
-                                .right = set_turning_rate.right * right_wheel_radius};
-
-    // basically inverse of mix_linear_and_angular()
-    double mean_linear = ( set_velocity.left + set_velocity.right ) / 2;
-
-    double angular_proportion = (set_velocity.right - set_velocity.left)
-                                / (wheel_separation);   // Why not divide by 2?
-    odometry_.updateOpenLoop(mean_linear , angular_proportion, current_time);
-  }
-  else
-  {
-    double left_feedback_mean = 0.0;
-    double right_feedback_mean = 0.0;
-    for (size_t index = 0; index < wheel_params_.wheels_per_side; ++index)
-    {
-      const double left_feedback =
-          registered_left_wheel_handles_[index].position.get().get_value();
-      const double right_feedback =
-          registered_right_wheel_handles_[index].position.get().get_value();
-
-      if (std::isnan(left_feedback) || std::isnan(right_feedback))
-      {
-        RCLCPP_ERROR(
-            node_->get_logger(),
-            "Either the left or right wheel is invalid for index [%zu]", index);
-        return false;
-      }
-
-      left_feedback_mean += left_feedback;
-      right_feedback_mean += right_feedback;
-    }
-    left_feedback_mean /= wheel_params_.wheels_per_side;
-    right_feedback_mean /= wheel_params_.wheels_per_side;
-
-    odometry_.update(left_feedback_mean, right_feedback_mean, current_time);
-
-  }
+void AckerDiffController::publish_odometry(const rclcpp::Time & current_time)
+{
+  const Odometry & odometry_ = core_.odometry();
 
   tf2::Quaternion orientation;
   orientation.setRPY(0.0, 0.0, odometry_.getHeading());
@@ -886,7 +722,6 @@ bool AckerDiffController::update_odometry(
     transform.transform.rotation.w = orientation.w();
     realtime_odometry_transform_publisher_->unlockAndPublish();
   }
-  return true;
 }
 }  // namespace acker_drive_controller
 

@@ -24,8 +24,6 @@
 
 #include <cmath>
 
-#include "rclcpp/time.hpp"
-
 #include "acker_diff_controller/rolling_mean_accumulator.hpp"
 
 namespace acker_diff_controller
@@ -35,9 +33,10 @@ class Odometry
 public:
   explicit Odometry(size_t velocity_rolling_window_size = 10);
 
-  void init(const rclcpp::Time & time);
-  bool update(double left_pos, double right_pos, const rclcpp::Time & time);
-  void updateOpenLoop(double linear, double angular, const rclcpp::Time & time);
+  // All times are in seconds on a single monotonic time base.
+  void init(double time);
+  bool update(double left_pos, double right_pos, double time);
+  void updateOpenLoop(double linear, double angular, double time);
   void resetOdometry();
 
   double getX() const { return x_; }
@@ -56,8 +55,8 @@ private:
   void integrateExact(double linear, double angular);
   void resetAccumulators();
 
-  // Current timestamp:
-  rclcpp::Time timestamp_;
+  // Current timestamp [s]:
+  double timestamp_;
 
   // Current pose:
   double x_;        //   [m]

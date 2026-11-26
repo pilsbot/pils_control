@@ -38,17 +38,17 @@ Odometry::Odometry(size_t velocity_rolling_window_size)
 {
 }
 
-void Odometry::init(const rclcpp::Time & time)
+void Odometry::init(double time)
 {
   // Reset accumulators and timestamp:
   resetAccumulators();
   timestamp_ = time;
 }
 
-bool Odometry::update(double left_pos, double right_pos, const rclcpp::Time & time)
+bool Odometry::update(double left_pos, double right_pos, double time)
 {
   // We cannot estimate the speed with very small time intervals:
-  const double dt = time.seconds() - timestamp_.seconds();
+  const double dt = time - timestamp_;
   if (dt < 0.0001)
   {
     return false;  // Interval too small to integrate with
@@ -86,14 +86,14 @@ bool Odometry::update(double left_pos, double right_pos, const rclcpp::Time & ti
   return true;
 }
 
-void Odometry::updateOpenLoop(double linear, double angular, const rclcpp::Time & time)
+void Odometry::updateOpenLoop(double linear, double angular, double time)
 {
   /// Save last linear and angular velocity:
   linear_ = linear;
   angular_ = angular;
 
   /// Integrate odometry:
-  const double dt = time.seconds() - timestamp_.seconds();
+  const double dt = time - timestamp_;
   timestamp_ = time;
   integrateExact(linear * dt, angular * dt);
 }

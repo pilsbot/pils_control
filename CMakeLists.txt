@@ -25,14 +25,24 @@ find_package(tf2_msgs REQUIRED)
 
 #find_package(ament_cmake_python REQUIRED)
 
-add_library(acker_diff_controller SHARED
-  src/acker_diff_controller.cpp
+# ROS-free core: kinematics, steering loop, limiting and odometry.
+# Must not depend on any ROS package, so it builds identically on every distro.
+add_library(acker_diff_core STATIC
+  src/acker_diff_core.cpp
   src/odometry.cpp
   src/speed_limiter.cpp
   lib/minimal-PID-controller/pid.cpp
 )
+set_target_properties(acker_diff_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(acker_diff_core PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/minimal-PID-controller>
+)
 
-target_include_directories(acker_diff_controller PRIVATE include)
+add_library(acker_diff_controller SHARED
+  src/acker_diff_controller.cpp
+)
+target_link_libraries(acker_diff_controller acker_diff_core)
 ament_target_dependencies(acker_diff_controller
   builtin_interfaces
   controller_interface
@@ -76,7 +86,7 @@ ament_export_dependencies(
 )
 ament_export_include_directories(
   include
-  lib
+  include/minimal-PID-controller
 )
 
 install(PROGRAMS
@@ -93,9 +103,10 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
 
   ament_add_gtest(test_characterisation test/test_characterisation.cpp)
-  target_include_directories(test_characterisation PRIVATE include)
-  target_link_libraries(test_characterisation acker_diff_controller)
-  ament_target_dependencies(test_characterisation rclcpp controller_interface)
+  target_link_libraries(test_characterisation acker_diff_core)
+
+  ament_add_gtest(test_acker_diff_core test/test_acker_diff_core.cpp)
+  target_link_libraries(test_acker_diff_core acker_diff_core)
 endif()
 
 ament_package()

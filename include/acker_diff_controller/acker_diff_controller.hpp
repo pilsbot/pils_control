@@ -21,7 +21,6 @@
 #include <chrono>
 #include <cmath>
 #include <memory>
-#include <queue>
 #include <string>
 #include <vector>
 
@@ -38,10 +37,8 @@
 #include "tf2_msgs/msg/tf_message.hpp"
 #include "ackermann_msgs/msg/ackermann_drive_stamped.hpp"
 
-#include "acker_diff_controller/odometry.hpp"
-#include "acker_diff_controller/speed_limiter.hpp"
+#include "acker_diff_controller/acker_diff_core.hpp"
 #include "acker_diff_controller/visibility_control.h"
-#include "../lib/minimal-PID-controller/pid.h"
 
 namespace acker_diff_controller
 {
@@ -106,20 +103,7 @@ protected:
   CallbackReturn configure_steering_angle(std::string & name,
       std::vector<SteeringHandle>& handle);
 
-  struct WheelSpeeds {
-    double left;
-    double right;
-  };
-  typedef WheelSpeeds WheelTurningRate;
-
-  double last_limited_linear_command_;
-
-  WheelSpeeds calc_turning_speeds(const double linear_speed,
-                                  const double turning_angle);
-  WheelTurningRate mix_linear_and_angular(const AckerDiffController::WheelSpeeds& linear,
-                                          const double angular_speed);
-  bool update_odometry(const AckerDiffController::WheelTurningRate& set_turning_rate,
-                       const rclcpp::Time& current_time);
+  void publish_odometry(const rclcpp::Time & current_time);
 
   std::vector<std::string> left_wheel_names_;
   std::vector<std::string> right_wheel_names_;
@@ -140,14 +124,7 @@ protected:
     double right_radius_multiplier = 1.0;
   } wheel_params_;
 
-  struct SteeringParams {
-    bool has_position_limit = false;
-    double max_angle = 0;       // rad
-    double min_angle = 0;       // rad
-    double max_angular_velocity = 0;    // rad/s
-    double max_angular_acceleration = 0;// rad/s^2
-    double limit_linear_at_angle_diff_to_setpoint = 0; // rad
-  } steering_params_;
+  SteeringParams steering_params_;
 
   struct OdometryParams
   {
@@ -164,9 +141,9 @@ protected:
     .max = NAN, .min = NAN,
     .max_dv = NAN, .overshoot_integral_adaptation = NAN
   };
-  PID pid_controller_;
-
-  Odometry odometry_;
+  // Everything that is computed lives here; this class only adapts it to ROS.
+  AckerDiffCore core_;
+  size_t velocity_rolling_window_size_ = 10;
 
   std::shared_ptr<rclcpp::Publisher<nav_msgs::msg::Odometry>> odometry_publisher_ = nullptr;
   std::shared_ptr<realtime_tools::RealtimePublisher<nav_msgs::msg::Odometry>>
@@ -186,9 +163,7 @@ protected:
 
   realtime_tools::RealtimeBox<std::shared_ptr<AckermannStamped>> received_command_msg_ptr_{nullptr};
 
-  std::queue<AckermannStamped> previous_commands_;  // last two commands
-
-  // speed limiters
+  // speed limiters, handed to the core on configure
   SpeedLimiter limiter_linear_;
   SpeedLimiter limiter_angle_;
 
