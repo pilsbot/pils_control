@@ -50,15 +50,8 @@ using lifecycle_msgs::msg::State;
 
 AckerDiffController::AckerDiffController() : controller_interface::ControllerInterface() {}
 
-controller_interface::return_type AckerDiffController::init(const std::string & controller_name)
+CallbackReturn AckerDiffController::on_init()
 {
-  // initialize lifecycle node
-  auto ret = ControllerInterface::init(controller_name);
-  if (ret != controller_interface::return_type::OK)
-  {
-    return ret;
-  }
-
   try
   {
     // with the lifecycle node being initialized, we can declare parameters
@@ -111,10 +104,10 @@ controller_interface::return_type AckerDiffController::init(const std::string & 
   catch (const std::exception & e)
   {
     fprintf(stderr, "Exception thrown during init stage with message: %s \n", e.what());
-    return controller_interface::return_type::ERROR;
+    return CallbackReturn::ERROR;
   }
 
-  return controller_interface::return_type::OK;
+  return CallbackReturn::SUCCESS;
 }
 
 InterfaceConfiguration AckerDiffController::command_interface_configuration() const
@@ -149,18 +142,10 @@ InterfaceConfiguration AckerDiffController::state_interface_configuration() cons
   return {interface_configuration_type::INDIVIDUAL, conf_names};
 }
 
-controller_interface::return_type AckerDiffController::update()
+controller_interface::return_type AckerDiffController::update(
+  const rclcpp::Time & time, const rclcpp::Duration & period)
 {
-  auto logger = node_->get_logger();
-  if (get_current_state().id() == State::PRIMARY_STATE_INACTIVE)
-  {
-    if (!is_halted)
-    {
-      halt();
-      is_halted = true;
-    }
-    return controller_interface::return_type::OK;
-  }
+  auto logger = get_node()->get_logger();
 
 
   std::shared_ptr<AckermannStamped> last_msg;
@@ -172,8 +157,7 @@ controller_interface::return_type AckerDiffController::update()
     return controller_interface::return_type::ERROR;
   }
 
-  // this is a different time source than the steady clock `clock_`
-  const auto message_dt = node_->get_clock()->now() - last_msg->header.stamp;
+  const auto message_dt = get_node()->get_clock()->now() - last_msg->header.stamp;
   // Brake if cmd_vel has timed out, override the stored command
   if (message_dt > cmd_vel_timeout_)
   {
@@ -181,9 +165,10 @@ controller_interface::return_type AckerDiffController::update()
     last_msg->drive.steering_angle_velocity = 0;
   }
 
-  const auto current_time = clock_.now();
-  const auto update_dt = current_time - previous_update_timestamp_;
-  previous_update_timestamp_ = current_time;
+  // Stamps use the controller manager's time (ROS time), not a steady clock,
+  // so odometry and TF line up with the rest of the system.
+  const auto & current_time = time;
+  const auto & update_dt = period;
 
   AckerDiffCore::Measurement measurement{
     registered_steering_axle_handle_[0].get().get_value(), WheelPair{0.0, 0.0}};
@@ -206,13 +191,13 @@ controller_interface::return_type AckerDiffController::update()
   const auto out = core_.step(command, measurement, update_dt.seconds(), current_time.seconds());
 
   if (out.status == AckerDiffCore::Status::invalid_steering_angle) {
-    RCLCPP_ERROR_THROTTLE(logger, *node_->get_clock(), 1000,
+    RCLCPP_ERROR_THROTTLE(logger, *get_node()->get_clock(), 1000,
         "Could not get current steering angle!");
     return controller_interface::return_type::ERROR;
   }
 
   if (out.steering_limit_reset) {
-    RCLCPP_WARN_THROTTLE(logger, *node_->get_clock(), 1000,
+    RCLCPP_WARN_THROTTLE(logger, *get_node()->get_clock(), 1000,
         "Current steering angle (%lf) over configured limit (%lf - %lf)!\n"
         "Resetting PID-Controller.\n"
         "If this happens frequently, consider re-tuning the PID values.",
@@ -239,7 +224,7 @@ controller_interface::return_type AckerDiffController::update()
   }
 
   if (out.status == AckerDiffCore::Status::invalid_wheel_position) {
-    RCLCPP_ERROR(node_->get_logger(), "Either the left or right wheel position is invalid");
+    RCLCPP_ERROR(get_node()->get_logger(), "Either the left or right wheel position is invalid");
     return controller_interface::return_type::ERROR;
   }
 
@@ -257,20 +242,19 @@ controller_interface::return_type AckerDiffController::update()
 
 CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &)
 {
-  auto logger = node_->get_logger();
+  auto logger = get_node()->get_logger();
 
   // update parameters
-  left_wheel_names_ = node_->get_parameter("left_wheel_names").as_string_array();
-  right_wheel_names_ = node_->get_parameter("right_wheel_names").as_string_array();
-  steering_axle_name_ = node_->get_parameter("steering_axle_name").as_string();
+  left_wheel_names_ = get_node()->get_parameter("left_wheel_names").as_string_array();
+  right_wheel_names_ = get_node()->get_parameter("right_wheel_names").as_string_array();
+  steering_axle_name_ = get_node()->get_parameter("steering_axle_name").as_string();
 
   RCLCPP_INFO_ONCE(
     logger,
-    "Wheel names: \n" +
-    left_wheel_names_[0] + "\n" +
-    right_wheel_names_[0] + "\nSteering axle name:\n" +
-    steering_axle_name_
-  );
+    "Wheel names: \n%s\n%s\nSteering axle name:\n%s",
+    left_wheel_names_.empty() ? "" : left_wheel_names_[0].c_str(),
+    right_wheel_names_.empty() ? "" : right_wheel_names_[0].c_str(),
+    steering_axle_name_.c_str());
 
   if (left_wheel_names_.size() != right_wheel_names_.size())
   {
@@ -293,81 +277,81 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
   }
 
 
-  wheel_params_.separation = node_->get_parameter("wheel_separation").as_double();
+  wheel_params_.separation = get_node()->get_parameter("wheel_separation").as_double();
   if(std::isnan(wheel_params_.separation) || wheel_params_.separation == 0) {
     RCLCPP_ERROR(logger,
         "Wheel separation '%lf' is unplausible!", wheel_params_.separation);
     return CallbackReturn::ERROR;
   }
-  wheel_params_.wheelbase = node_->get_parameter("wheel_base_distance").as_double();
+  wheel_params_.wheelbase = get_node()->get_parameter("wheel_base_distance").as_double();
   if(std::isnan(wheel_params_.wheelbase) || wheel_params_.wheelbase == 0) {
     RCLCPP_ERROR(logger,
         "Wheel wheelbase distance '%lf' is unplausible!", wheel_params_.wheelbase);
     return CallbackReturn::ERROR;
   }
   wheel_params_.wheels_per_side =
-    static_cast<size_t>(node_->get_parameter("wheels_per_side").as_int());
-  wheel_params_.radius = node_->get_parameter("wheel_radius").as_double();
+    static_cast<size_t>(get_node()->get_parameter("wheels_per_side").as_int());
+  wheel_params_.radius = get_node()->get_parameter("wheel_radius").as_double();
   wheel_params_.separation_multiplier =
-    node_->get_parameter("wheel_separation_multiplier").as_double();
+    get_node()->get_parameter("wheel_separation_multiplier").as_double();
   wheel_params_.left_radius_multiplier =
-    node_->get_parameter("left_wheel_radius_multiplier").as_double();
+    get_node()->get_parameter("left_wheel_radius_multiplier").as_double();
   wheel_params_.right_radius_multiplier =
-    node_->get_parameter("right_wheel_radius_multiplier").as_double();
+    get_node()->get_parameter("right_wheel_radius_multiplier").as_double();
 
   velocity_rolling_window_size_ =
-    static_cast<size_t>(node_->get_parameter("velocity_rolling_window_size").as_int());
+    static_cast<size_t>(get_node()->get_parameter("velocity_rolling_window_size").as_int());
 
-  odom_params_.odom_frame_id = node_->get_parameter("odom_frame_id").as_string();
-  odom_params_.base_frame_id = node_->get_parameter("base_frame_id").as_string();
+  odom_params_.odom_frame_id = get_node()->get_parameter("odom_frame_id").as_string();
+  odom_params_.base_frame_id = get_node()->get_parameter("base_frame_id").as_string();
 
-  auto pose_diagonal = node_->get_parameter("pose_covariance_diagonal").as_double_array();
+  auto pose_diagonal = get_node()->get_parameter("pose_covariance_diagonal").as_double_array();
   std::copy(
     pose_diagonal.begin(), pose_diagonal.end(), odom_params_.pose_covariance_diagonal.begin());
 
-  auto twist_diagonal = node_->get_parameter("twist_covariance_diagonal").as_double_array();
+  auto twist_diagonal = get_node()->get_parameter("twist_covariance_diagonal").as_double_array();
   std::copy(
     twist_diagonal.begin(), twist_diagonal.end(), odom_params_.twist_covariance_diagonal.begin());
 
-  odom_params_.open_loop = node_->get_parameter("open_loop").as_bool();
-  odom_params_.enable_odom_tf = node_->get_parameter("enable_odom_tf").as_bool();
+  odom_params_.open_loop = get_node()->get_parameter("open_loop").as_bool();
+  odom_params_.enable_odom_tf = get_node()->get_parameter("enable_odom_tf").as_bool();
 
   cmd_vel_timeout_ = std::chrono::milliseconds{
-    static_cast<int>(node_->get_parameter("cmd_vel_timeout").as_double() * 1000.0)};
-  publish_limited_velocity_ = node_->get_parameter("publish_limited_velocity").as_bool();
-  use_stamped_vel_ = node_->get_parameter("use_stamped_vel").as_bool();
+    static_cast<int>(get_node()->get_parameter("cmd_vel_timeout").as_double() * 1000.0)};
+  publish_limited_velocity_ = get_node()->get_parameter("publish_limited_velocity").as_bool();
+  use_stamped_vel_ = get_node()->get_parameter("use_stamped_vel").as_bool();
 
   try
   {
     limiter_linear_ = SpeedLimiter(
-      node_->get_parameter("linear.x.has_velocity_limits").as_bool(),
-      node_->get_parameter("linear.x.has_acceleration_limits").as_bool(),
-      node_->get_parameter("linear.x.has_jerk_limits").as_bool(),
-      node_->get_parameter("linear.x.min_velocity").as_double(),
-      node_->get_parameter("linear.x.max_velocity").as_double(),
-      node_->get_parameter("linear.x.min_acceleration").as_double(),
-      node_->get_parameter("linear.x.max_acceleration").as_double(),
-      node_->get_parameter("linear.x.min_jerk").as_double(),
-      node_->get_parameter("linear.x.max_jerk").as_double());
+      get_node()->get_parameter("linear.x.has_velocity_limits").as_bool(),
+      get_node()->get_parameter("linear.x.has_acceleration_limits").as_bool(),
+      get_node()->get_parameter("linear.x.has_jerk_limits").as_bool(),
+      get_node()->get_parameter("linear.x.min_velocity").as_double(),
+      get_node()->get_parameter("linear.x.max_velocity").as_double(),
+      get_node()->get_parameter("linear.x.min_acceleration").as_double(),
+      get_node()->get_parameter("linear.x.max_acceleration").as_double(),
+      get_node()->get_parameter("linear.x.min_jerk").as_double(),
+      get_node()->get_parameter("linear.x.max_jerk").as_double());
   }
   catch (const std::runtime_error & e)
   {
-    RCLCPP_ERROR(node_->get_logger(), "Error configuring linear speed limiter: %s", e.what());
+    RCLCPP_ERROR(get_node()->get_logger(), "Error configuring linear speed limiter: %s", e.what());
   }
 
   steering_params_ = SteeringParams {
       .has_position_limit =
-        node_->get_parameter("angle.z.has_position_limits").as_bool(),
+        get_node()->get_parameter("angle.z.has_position_limits").as_bool(),
       .max_angle =
-        node_->get_parameter("angle.z.max_angle").as_double(),
+        get_node()->get_parameter("angle.z.max_angle").as_double(),
       .min_angle =
-        node_->get_parameter("angle.z.min_angle").as_double(),
+        get_node()->get_parameter("angle.z.min_angle").as_double(),
       .max_angular_velocity =
-        node_->get_parameter("angle.z.max_angular_velocity").as_double(),
+        get_node()->get_parameter("angle.z.max_angular_velocity").as_double(),
       .max_angular_acceleration =
-        node_->get_parameter("angle.z.max_angular_acceleration").as_double(),
+        get_node()->get_parameter("angle.z.max_angular_acceleration").as_double(),
       .limit_linear_at_angle_diff_to_setpoint =
-        node_->get_parameter("angle.z.max_angle_setpoint_diff").as_double(),
+        get_node()->get_parameter("angle.z.max_angle_setpoint_diff").as_double(),
   };
   if(steering_params_.has_position_limit && isnan(steering_params_.min_angle)) {
     steering_params_.min_angle = -steering_params_.max_angle;
@@ -383,18 +367,18 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
   }
   catch (const std::runtime_error & e)
   {
-    RCLCPP_ERROR(node_->get_logger(), "max_angular_velocity: %lf", steering_params_.max_angular_velocity);
-    RCLCPP_ERROR(node_->get_logger(), "Error configuring steering angle limiter: %s", e.what());
+    RCLCPP_ERROR(get_node()->get_logger(), "max_angular_velocity: %lf", steering_params_.max_angular_velocity);
+    RCLCPP_ERROR(get_node()->get_logger(), "Error configuring steering angle limiter: %s", e.what());
   }
 
   pid_params_ = PID::Settings{
-    .Kp = node_->get_parameter("pid.Kp").as_double(),
-    .Ki = node_->get_parameter("pid.Ki").as_double(),
-    .Kd = node_->get_parameter("pid.Kd").as_double(),
+    .Kp = get_node()->get_parameter("pid.Kp").as_double(),
+    .Ki = get_node()->get_parameter("pid.Ki").as_double(),
+    .Kd = get_node()->get_parameter("pid.Kd").as_double(),
     .max = steering_params_.max_angular_velocity,
     .min = -steering_params_.max_angular_velocity,
     .max_dv = steering_params_.max_angular_acceleration,
-    .overshoot_integral_adaptation = node_->get_parameter("pid.oIa").as_double(),
+    .overshoot_integral_adaptation = get_node()->get_parameter("pid.oIa").as_double(),
   };
 
   RCLCPP_INFO(logger, "PID: p %.4lf i %.4lf d %.4lf", pid_params_.Kp, pid_params_.Ki, pid_params_.Kd);
@@ -420,7 +404,7 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
   if (publish_limited_velocity_)
   {
     limited_command_publisher_ =
-      node_->create_publisher<AckermannStamped>(DEFAULT_COMMAND_OUT_TOPIC, rclcpp::SystemDefaultsQoS());
+      get_node()->create_publisher<AckermannStamped>(DEFAULT_COMMAND_OUT_TOPIC, rclcpp::SystemDefaultsQoS());
     realtime_limited_command_publisher_ =
       std::make_shared<realtime_tools::RealtimePublisher<AckermannStamped>>(limited_command_publisher_);
   }
@@ -432,33 +416,33 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
   // initialize command subscriber
   if (use_stamped_vel_)
   {
-    command_subscriber_ = node_->create_subscription<AckermannStamped>(
+    command_subscriber_ = get_node()->create_subscription<AckermannStamped>(
       DEFAULT_COMMAND_TOPIC, rclcpp::SystemDefaultsQoS(),
       [this](const std::shared_ptr<AckermannStamped> msg) -> void {
         if (!subscriber_is_active_)
         {
-          RCLCPP_WARN(node_->get_logger(), "Can't accept new commands. subscriber is inactive");
+          RCLCPP_WARN(get_node()->get_logger(), "Can't accept new commands. subscriber is inactive");
           return;
         }
         if ((msg->header.stamp.sec == 0) && (msg->header.stamp.nanosec == 0))
         {
           RCLCPP_WARN_ONCE(
-            node_->get_logger(),
+            get_node()->get_logger(),
             "Received AckermannStamped with zero timestamp, setting it to current "
             "time, this message will only be shown once");
-          msg->header.stamp = node_->get_clock()->now();
+          msg->header.stamp = get_node()->get_clock()->now();
         }
         received_command_msg_ptr_.set(std::move(msg));
       });
   }
   else
   {
-    command_unstamped_subscriber_ = node_->create_subscription<Ackermann>(
+    command_unstamped_subscriber_ = get_node()->create_subscription<Ackermann>(
       DEFAULT_COMMAND_UNSTAMPED_TOPIC, rclcpp::SystemDefaultsQoS(),
       [this](const std::shared_ptr<Ackermann> msg) -> void {
         if (!subscriber_is_active_)
         {
-          RCLCPP_WARN(node_->get_logger(), "Can't accept new commands. subscriber is inactive");
+          RCLCPP_WARN(get_node()->get_logger(), "Can't accept new commands. subscriber is inactive");
           return;
         }
 
@@ -466,12 +450,12 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
         std::shared_ptr<AckermannStamped> command_stamped;
         received_command_msg_ptr_.get(command_stamped);
         command_stamped->drive = *msg;
-        command_stamped->header.stamp = node_->get_clock()->now();
+        command_stamped->header.stamp = get_node()->get_clock()->now();
       });
   }
 
   // initialize odometry publisher and messasge
-  odometry_publisher_ = node_->create_publisher<nav_msgs::msg::Odometry>(
+  odometry_publisher_ = get_node()->create_publisher<nav_msgs::msg::Odometry>(
     DEFAULT_ODOMETRY_TOPIC, rclcpp::SystemDefaultsQoS());
   realtime_odometry_publisher_ =
     std::make_shared<realtime_tools::RealtimePublisher<nav_msgs::msg::Odometry>>(
@@ -496,7 +480,7 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
   }
 
   // initialize transform publisher and message
-  odometry_transform_publisher_ = node_->create_publisher<tf2_msgs::msg::TFMessage>(
+  odometry_transform_publisher_ = get_node()->create_publisher<tf2_msgs::msg::TFMessage>(
     DEFAULT_TRANSFORM_TOPIC, rclcpp::SystemDefaultsQoS());
   realtime_odometry_transform_publisher_ =
     std::make_shared<realtime_tools::RealtimePublisher<tf2_msgs::msg::TFMessage>>(
@@ -508,7 +492,6 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
   odometry_transform_message.transforms.front().header.frame_id = odom_params_.odom_frame_id;
   odometry_transform_message.transforms.front().child_frame_id = odom_params_.base_frame_id;
 
-  previous_update_timestamp_ = clock_.now();
   return CallbackReturn::SUCCESS;
 }
 
@@ -530,27 +513,32 @@ CallbackReturn AckerDiffController::on_activate(const rclcpp_lifecycle::State &)
   if (registered_left_wheel_handles_.empty() || registered_right_wheel_handles_.empty())
   {
     RCLCPP_ERROR(
-      node_->get_logger(), "Either left wheel interfaces, right wheel interfaces are non existent");
+      get_node()->get_logger(), "Either left wheel interfaces, right wheel interfaces are non existent");
     return CallbackReturn::ERROR;
   }
 
   if (registered_steering_axle_handle_.empty())
   {
     RCLCPP_ERROR(
-      node_->get_logger(), "steering axle interface ", steering_axle_name_," is non existent");
+      get_node()->get_logger(), "steering axle interface %s is non existent", steering_axle_name_.c_str());
     return CallbackReturn::ERROR;
   }
 
-  is_halted = false;
   subscriber_is_active_ = true;
 
-  RCLCPP_DEBUG(node_->get_logger(), "Subscriber and publisher are now active.");
+  RCLCPP_DEBUG(get_node()->get_logger(), "Subscriber and publisher are now active.");
   return CallbackReturn::SUCCESS;
 }
 
 CallbackReturn AckerDiffController::on_deactivate(const rclcpp_lifecycle::State &)
 {
   subscriber_is_active_ = false;
+  halt();
+  // The controller manager releases the loaned interfaces after deactivation and
+  // loans fresh ones on the next activation, so these references must not survive.
+  registered_left_wheel_handles_.clear();
+  registered_right_wheel_handles_.clear();
+  registered_steering_axle_handle_.clear();
   return CallbackReturn::SUCCESS;
 }
 
@@ -587,7 +575,6 @@ bool AckerDiffController::reset()
   command_unstamped_subscriber_.reset();
 
   received_command_msg_ptr_.set(nullptr);
-  is_halted = false;
   return true;
 }
 
@@ -615,7 +602,7 @@ CallbackReturn AckerDiffController::configure_side(
   const std::string & side, const std::vector<std::string> & wheel_names,
   std::vector<WheelHandle> & registered_handles)
 {
-  auto logger = node_->get_logger();
+  auto logger = get_node()->get_logger();
 
   if (wheel_names.empty())
   {
@@ -629,7 +616,7 @@ CallbackReturn AckerDiffController::configure_side(
   {
     const auto state_handle = std::find_if(
       state_interfaces_.cbegin(), state_interfaces_.cend(), [&wheel_name](const auto & interface) {
-        return interface.get_name() == wheel_name &&
+        return interface.get_prefix_name() == wheel_name &&
                interface.get_interface_name() == HW_IF_POSITION;
       });
 
@@ -642,7 +629,7 @@ CallbackReturn AckerDiffController::configure_side(
     const auto command_handle = std::find_if(
       command_interfaces_.begin(), command_interfaces_.end(),
       [&wheel_name](const auto & interface) {
-        return interface.get_name() == wheel_name &&
+        return interface.get_prefix_name() == wheel_name &&
                interface.get_interface_name() == HW_IF_VELOCITY;
       });
 
@@ -663,7 +650,7 @@ CallbackReturn AckerDiffController::configure_side(
 
 CallbackReturn AckerDiffController::configure_steering_angle(std::string & name,
     std::vector<SteeringHandle>& handle) {
-  auto logger = node_->get_logger();
+  auto logger = get_node()->get_logger();
   if (name.empty())
   {
     RCLCPP_ERROR(logger, "No steering joint name specified");
@@ -672,7 +659,7 @@ CallbackReturn AckerDiffController::configure_steering_angle(std::string & name,
 
   const auto steering_handle = std::find_if(
     state_interfaces_.cbegin(), state_interfaces_.cend(), [&name](const auto & interface) {
-      return interface.get_name() == name &&
+      return interface.get_prefix_name() == name &&
              interface.get_interface_name() == HW_IF_POSITION;
     });
 

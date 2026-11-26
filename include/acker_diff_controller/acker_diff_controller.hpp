@@ -54,7 +54,7 @@ public:
   AckerDiffController();
 
   ACKER_DIFF_CONTROLLER_PUBLIC
-  controller_interface::return_type init(const std::string & controller_name) override;
+  CallbackReturn on_init() override;
 
   ACKER_DIFF_CONTROLLER_PUBLIC
   controller_interface::InterfaceConfiguration command_interface_configuration() const override;
@@ -63,7 +63,8 @@ public:
   controller_interface::InterfaceConfiguration state_interface_configuration() const override;
 
   ACKER_DIFF_CONTROLLER_PUBLIC
-  controller_interface::return_type update() override;
+  controller_interface::return_type update(
+    const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
   ACKER_DIFF_CONTROLLER_PUBLIC
   CallbackReturn on_configure(const rclcpp_lifecycle::State & previous_state) override;
@@ -172,10 +173,6 @@ protected:
   std::shared_ptr<realtime_tools::RealtimePublisher<AckermannStamped>> realtime_limited_command_publisher_ =
     nullptr;
 
-  rclcpp::Clock clock_{RCL_STEADY_TIME};
-  rclcpp::Time previous_update_timestamp_{0};
-
-  bool is_halted = false;
   bool use_stamped_vel_ = true;
 
   bool reset();
