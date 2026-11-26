@@ -88,4 +88,14 @@ install(PROGRAMS
 ament_export_libraries(
   acker_diff_controller
 )
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(test_characterisation test/test_characterisation.cpp)
+  target_include_directories(test_characterisation PRIVATE include)
+  target_link_libraries(test_characterisation acker_diff_controller)
+  ament_target_dependencies(test_characterisation rclcpp controller_interface)
+endif()
+
 ament_package()
