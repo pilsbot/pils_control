@@ -486,7 +486,7 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
     std::make_shared<realtime_tools::RealtimePublisher<tf2_msgs::msg::TFMessage>>(
       odometry_transform_publisher_);
 
-  // keeping track of odom and base_link transforms only
+  // keeping track of the odom to base frame transform only
   auto & odometry_transform_message = realtime_odometry_transform_publisher_->msg_;
   odometry_transform_message.transforms.resize(1);
   odometry_transform_message.transforms.front().header.frame_id = odom_params_.odom_frame_id;
@@ -677,23 +677,25 @@ CallbackReturn AckerDiffController::configure_steering_angle(std::string & name,
 
 void AckerDiffController::publish_odometry(const rclcpp::Time & current_time)
 {
-  const Odometry & odometry_ = core_.odometry();
+  // The estimator tracks the front axle; publish the rear axle centre (docs/adr/0002).
+  const AckerDiffCore::BaseState & base = core_.rear_axle_centre();
 
   tf2::Quaternion orientation;
-  orientation.setRPY(0.0, 0.0, odometry_.getHeading());
+  orientation.setRPY(0.0, 0.0, base.pose.heading);
 
   if (realtime_odometry_publisher_->trylock())
   {
     auto & odometry_message = realtime_odometry_publisher_->msg_;
     odometry_message.header.stamp = current_time;
-    odometry_message.pose.pose.position.x = odometry_.getX();
-    odometry_message.pose.pose.position.y = odometry_.getY();
+    odometry_message.pose.pose.position.x = base.pose.x;
+    odometry_message.pose.pose.position.y = base.pose.y;
     odometry_message.pose.pose.orientation.x = orientation.x();
     odometry_message.pose.pose.orientation.y = orientation.y();
     odometry_message.pose.pose.orientation.z = orientation.z();
     odometry_message.pose.pose.orientation.w = orientation.w();
-    odometry_message.twist.twist.linear.x = odometry_.getLinear();
-    odometry_message.twist.twist.angular.z = odometry_.getAngular();
+    odometry_message.twist.twist.linear.x = base.twist.linear_x;
+    odometry_message.twist.twist.linear.y = base.twist.linear_y;
+    odometry_message.twist.twist.angular.z = base.twist.angular;
     realtime_odometry_publisher_->unlockAndPublish();
   }
 
@@ -701,8 +703,8 @@ void AckerDiffController::publish_odometry(const rclcpp::Time & current_time)
   {
     auto & transform = realtime_odometry_transform_publisher_->msg_.transforms.front();
     transform.header.stamp = current_time;
-    transform.transform.translation.x = odometry_.getX();
-    transform.transform.translation.y = odometry_.getY();
+    transform.transform.translation.x = base.pose.x;
+    transform.transform.translation.y = base.pose.y;
     transform.transform.rotation.x = orientation.x();
     transform.transform.rotation.y = orientation.y();
     transform.transform.rotation.z = orientation.z();

@@ -79,6 +79,30 @@ Twist2D open_loop_twist(const WheelGeometry & geometry, const WheelPair & turnin
   return Twist2D{mean_linear, angular_proportion};
 }
 
+Pose2D front_axle_to_rear_axle_centre(
+  const Pose2D & front_axle, const double steering_angle, const double wheelbase)
+{
+  const double chassis_heading = front_axle.heading + steering_angle;
+  return Pose2D{
+    front_axle.x - wheelbase * std::cos(chassis_heading),
+    front_axle.y - wheelbase * std::sin(chassis_heading),
+    chassis_heading};
+}
+
+PlanarTwist front_axle_twist_to_rear_axle_centre(
+  const double front_linear, const double front_angular, const double steering_angle,
+  const double steering_rate, const double wheelbase)
+{
+  const double chassis_angular = front_angular + steering_rate;
+  // The pivot moves along the front axle's heading, which is turned by
+  // -steering_angle against the chassis. The rear axle centre sits at
+  // (-wheelbase, 0) from the pivot, so the rotation adds -angular * wheelbase in y.
+  return PlanarTwist{
+    front_linear * std::cos(steering_angle),
+    -front_linear * std::sin(steering_angle) - chassis_angular * wheelbase,
+    chassis_angular};
+}
+
 void AckerDiffCore::configure(const Config & config)
 {
   config_ = config;
@@ -96,6 +120,28 @@ void AckerDiffCore::reset()
   pid_controller_ = PID();
   previous_commands_ = {AckerCommand{}, AckerCommand{}};
   last_limited_linear_command_ = 0;
+  has_last_steering_angle_ = false;
+  rear_axle_centre_ = BaseState{};
+  rear_axle_centre_.pose = front_axle_to_rear_axle_centre(
+    Pose2D{0.0, 0.0, 0.0}, 0.0, config_.geometry.wheelbase);
+}
+
+void AckerDiffCore::update_rear_axle_centre(const double steering_angle, const double now)
+{
+  double steering_rate = 0.0;
+  if (has_last_steering_angle_ && now > last_steering_time_) {
+    steering_rate = (steering_angle - last_steering_angle_) / (now - last_steering_time_);
+  }
+  has_last_steering_angle_ = true;
+  last_steering_angle_ = steering_angle;
+  last_steering_time_ = now;
+
+  const double wheelbase = config_.geometry.wheelbase;
+  rear_axle_centre_.pose = front_axle_to_rear_axle_centre(
+    Pose2D{odometry_.getX(), odometry_.getY(), odometry_.getHeading()},
+    steering_angle, wheelbase);
+  rear_axle_centre_.twist = front_axle_twist_to_rear_axle_centre(
+    odometry_.getLinear(), odometry_.getAngular(), steering_angle, steering_rate, wheelbase);
 }
 
 void AckerDiffCore::halt()
@@ -191,10 +237,12 @@ AckerDiffCore::Output AckerDiffCore::step(
     const WheelPair & position = measurement.wheel_position;
     if (std::isnan(position.left) || std::isnan(position.right)) {
       out.status = Status::invalid_wheel_position;
+      update_rear_axle_centre(current_steering_angle, now);
       return out;
     }
     odometry_.update(position.left, position.right, now);
   }
+  update_rear_axle_centre(current_steering_angle, now);
 
   out.wheel_rates = final_turning_rate;
   return out;

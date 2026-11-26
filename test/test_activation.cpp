@@ -6,9 +6,11 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cmath>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -18,6 +20,8 @@
 #include "hardware_interface/loaned_state_interface.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
+#include "nav_msgs/msg/odometry.hpp"
+#include "tf2_msgs/msg/tf_message.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 using hardware_interface::HW_IF_POSITION;
@@ -115,4 +119,49 @@ TEST_F(Activation, survives_deactivate_activate_cycle)
   assign_interfaces();
   ASSERT_EQ(controller_->get_node()->activate().id(), State::PRIMARY_STATE_ACTIVE);
   EXPECT_EQ(update_once(), controller_interface::return_type::OK);
+}
+
+// docs/adr/0002: odometry is published for the rear axle centre, as
+// odom -> base_footprint. Wheels stand still and the steering is at 0.2 rad,
+// so the rear axle centre sits one wheelbase behind the pivot along the
+// chassis heading: (-0.67 cos 0.2, -0.67 sin 0.2), yaw 0.2.
+TEST_F(Activation, publishes_rear_axle_centre_odometry_as_base_footprint)
+{
+  auto listener = std::make_shared<rclcpp::Node>("odometry_listener");
+  nav_msgs::msg::Odometry::SharedPtr odom;
+  tf2_msgs::msg::TFMessage::SharedPtr tf;
+  auto odom_sub = listener->create_subscription<nav_msgs::msg::Odometry>(
+    "/odom", 10, [&odom](nav_msgs::msg::Odometry::SharedPtr msg) { odom = msg; });
+  auto tf_sub = listener->create_subscription<tf2_msgs::msg::TFMessage>(
+    "/tf", 10, [&tf](tf2_msgs::msg::TFMessage::SharedPtr msg) { tf = msg; });
+
+  ASSERT_EQ(controller_->get_node()->configure().id(), State::PRIMARY_STATE_INACTIVE);
+  assign_interfaces();
+  ASSERT_EQ(controller_->get_node()->activate().id(), State::PRIMARY_STATE_ACTIVE);
+  steering_position_ = 0.2;
+
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while ((!odom || !tf) && std::chrono::steady_clock::now() < deadline) {
+    ASSERT_EQ(update_once(), controller_interface::return_type::OK);
+    rclcpp::spin_some(listener);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_TRUE(odom) << "no /odom received";
+  ASSERT_TRUE(tf) << "no /tf received";
+
+  constexpr double kTol = 1e-6;
+  EXPECT_EQ(odom->header.frame_id, "odom");
+  EXPECT_EQ(odom->child_frame_id, "base_footprint");
+  EXPECT_NEAR(odom->pose.pose.position.x, -0.656645, kTol);
+  EXPECT_NEAR(odom->pose.pose.position.y, -0.133108, kTol);
+  EXPECT_NEAR(odom->pose.pose.orientation.z, 0.0998334, kTol);  // sin(0.1)
+  EXPECT_NEAR(odom->pose.pose.orientation.w, 0.9950042, kTol);  // cos(0.1)
+
+  ASSERT_EQ(tf->transforms.size(), 1u);
+  const auto & transform = tf->transforms.front();
+  EXPECT_EQ(transform.header.frame_id, "odom");
+  EXPECT_EQ(transform.child_frame_id, "base_footprint");
+  EXPECT_NEAR(transform.transform.translation.x, -0.656645, kTol);
+  EXPECT_NEAR(transform.transform.translation.y, -0.133108, kTol);
+  EXPECT_NEAR(transform.transform.rotation.z, 0.0998334, kTol);
 }

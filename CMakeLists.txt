@@ -108,6 +108,9 @@ if(BUILD_TESTING)
   ament_add_gtest(test_acker_diff_core test/test_acker_diff_core.cpp)
   target_link_libraries(test_acker_diff_core acker_diff_core)
 
+  ament_add_gtest(test_rear_axle_centre test/test_rear_axle_centre.cpp)
+  target_link_libraries(test_rear_axle_centre acker_diff_core)
+
   ament_add_gtest(test_activation test/test_activation.cpp)
   target_include_directories(test_activation PRIVATE include)
   target_link_libraries(test_activation acker_diff_controller)

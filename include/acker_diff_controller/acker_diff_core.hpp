@@ -81,6 +81,35 @@ WheelPair mix_linear_and_angular(
 // Not an exact inverse of mix_linear_and_angular (see the "divide by 2" note).
 Twist2D open_loop_twist(const WheelGeometry & geometry, const WheelPair & turning_rate);
 
+struct Pose2D
+{
+  double x;
+  double y;
+  double heading;  // rad
+};
+
+// Pose of the rear axle centre for a given front axle pose (its pivot point
+// and heading). A positive steering angle steers right, so the chassis heading
+// is the front-axle heading plus the steering angle (docs/adr/0002).
+Pose2D front_axle_to_rear_axle_centre(
+  const Pose2D & front_axle, double steering_angle, double wheelbase);
+
+// Velocity of a planar rigid body, expressed in its own frame.
+struct PlanarTwist
+{
+  double linear_x;  // m/s, forward
+  double linear_y;  // m/s, left
+  double angular;   // rad/s, counter-clockwise
+};
+
+// Twist of the rear axle centre in the chassis frame, from the front axle's
+// forward speed and yaw rate. A rigid-body transform, not a vehicle model: the
+// chassis yaws at front yaw rate + steering rate, and the rear axle centre
+// moves with the pivot plus that rotation about it.
+PlanarTwist front_axle_twist_to_rear_axle_centre(
+  double front_linear, double front_angular, double steering_angle,
+  double steering_rate, double wheelbase);
+
 struct AckerCommand
 {
   double speed = 0.0;                    // m/s
@@ -139,7 +168,18 @@ public:
   Output step(
     const AckerCommand & command, const Measurement & measurement, double dt, double now);
 
+  struct BaseState
+  {
+    Pose2D pose{0.0, 0.0, 0.0};
+    PlanarTwist twist{0.0, 0.0, 0.0};
+  };
+
   const Odometry & odometry() const { return odometry_; }
+
+  // Odometry re-rooted at the rear axle centre, in the odometry frame. Updated
+  // by every step with a valid steering angle; the steering rate is the
+  // difference to the previous valid angle (zero on the first one after reset).
+  const BaseState & rear_axle_centre() const { return rear_axle_centre_; }
   const Config & config() const { return config_; }
 
 private:
@@ -148,6 +188,12 @@ private:
   Odometry odometry_;
   std::array<AckerCommand, 2> previous_commands_{};  // [0] second to last, [1] last
   double last_limited_linear_command_ = 0.0;
+
+  void update_rear_axle_centre(double steering_angle, double now);
+  BaseState rear_axle_centre_;
+  bool has_last_steering_angle_ = false;
+  double last_steering_angle_ = 0.0;
+  double last_steering_time_ = 0.0;
 };
 
 }  // namespace acker_diff_controller
