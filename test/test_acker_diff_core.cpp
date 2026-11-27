@@ -161,48 +161,118 @@ TEST(AckerDiffCore, invalid_wheel_position_keeps_odometry)
   EXPECT_EQ(core.odometry().getX(), 0.0);
 }
 
-// pils_control#3: the adapter halts the wheels on invalid input, so the core
-// must not resume from the speed it had before. The ramp restarts from zero.
-TEST(AckerDiffCore, linear_ramp_restarts_after_invalid_input)
+// pils_control#3: the adapter halts the wheels for one cycle on invalid input.
+// A glitch shorter than invalid_input_grace_period keeps the ramp state, so the
+// next valid cycle continues near the previous speed instead of braking hard
+// and ramping back up over seconds.
+TEST(AckerDiffCore, linear_ramp_survives_a_short_invalid_input_glitch)
 {
   for (const auto invalid : {straight_at(0, 0, NAN), straight_at(NAN, 0)}) {
+    auto config = pilsbot_config();
+    config.invalid_input_grace_period = 0.25;
     AckerDiffCore core;
-    core.configure(pilsbot_config());
+    core.configure(config);
     double t = 100.0;
-    for (int k = 0; k < 50; ++k) {
+    double speed = 0.0;
+    for (int k = 0; k < 300; ++k) {  // 6 s at 0.3 m/s^2: up to the 1.5 m/s limit
       t += kDt;
-      core.step(AckerCommand{1.0, 0.0, 0.0}, straight_at(0, 0), kDt, t);
+      speed = core.step(AckerCommand{1.5, 0.0, 0.0}, straight_at(0, 0), kDt, t)
+        .limited_command.speed;
     }
+    ASSERT_NEAR(speed, 1.5, 1e-9);
     t += kDt;
-    EXPECT_NE(core.step(AckerCommand{1.0, 0.0, 0.0}, invalid, kDt, t).status,
-      AckerDiffCore::Status::ok);
+    const auto glitch = core.step(AckerCommand{1.5, 0.0, 0.0}, invalid, kDt, t);
+    EXPECT_NE(glitch.status, AckerDiffCore::Status::ok);
+    EXPECT_EQ(glitch.wheel_rates.left, 0.0);
+    EXPECT_EQ(glitch.wheel_rates.right, 0.0);
     t += kDt;
-    const auto out = core.step(AckerCommand{1.0, 0.0, 0.0}, straight_at(0, 0), kDt, t);
-    EXPECT_NEAR(out.limited_command.speed, 0.3 * kDt, 1e-12);
+    const auto out = core.step(AckerCommand{1.5, 0.0, 0.0}, straight_at(0, 0), kDt, t);
+    EXPECT_NEAR(out.limited_command.speed, 1.5, 1e-9);
+    EXPECT_NEAR(out.wheel_rates.left, 1.5 / 0.125, 1e-9);
   }
 }
 
-// pils_control#3: the steering loop restarts too, so the correction does not
-// jump to its pre-fault value when valid data returns.
+// A sustained fault (at least the grace period) restarts the ramp from zero.
+TEST(AckerDiffCore, linear_ramp_restarts_after_sustained_invalid_input)
+{
+  for (const auto invalid : {straight_at(0, 0, NAN), straight_at(NAN, 0)}) {
+    for (const int fault_cycles : {12, 13}) {  // 0.24 s < 0.25 s <= 0.26 s
+      auto config = pilsbot_config();
+      config.invalid_input_grace_period = 0.25;
+      AckerDiffCore core;
+      core.configure(config);
+      double t = 100.0;
+      for (int k = 0; k < 50; ++k) {
+        t += kDt;
+        core.step(AckerCommand{1.0, 0.0, 0.0}, straight_at(0, 0), kDt, t);
+      }
+      for (int k = 0; k < fault_cycles; ++k) {
+        t += kDt;
+        EXPECT_NE(core.step(AckerCommand{1.0, 0.0, 0.0}, invalid, kDt, t).status,
+          AckerDiffCore::Status::ok);
+      }
+      t += kDt;
+      const auto out = core.step(AckerCommand{1.0, 0.0, 0.0}, straight_at(0, 0), kDt, t);
+      if (fault_cycles == 12) {
+        EXPECT_GT(out.limited_command.speed, 0.3) << "short fault must keep the ramp";
+      } else {
+        EXPECT_NEAR(out.limited_command.speed, 0.3 * kDt, 1e-12) << "ramp restarts from 0";
+      }
+    }
+  }
+}
+
+// A zero grace period restarts on any invalid cycle (the behaviour before the grace period).
+TEST(AckerDiffCore, zero_grace_period_restarts_on_a_single_invalid_cycle)
+{
+  auto config = pilsbot_config();
+  config.invalid_input_grace_period = 0.0;
+  AckerDiffCore core;
+  core.configure(config);
+  double t = 100.0;
+  for (int k = 0; k < 50; ++k) {
+    t += kDt;
+    core.step(AckerCommand{1.0, 0.0, 0.0}, straight_at(0, 0), kDt, t);
+  }
+  t += kDt;
+  core.step(AckerCommand{1.0, 0.0, 0.0}, straight_at(0, 0, NAN), kDt, t);
+  t += kDt;
+  const auto out = core.step(AckerCommand{1.0, 0.0, 0.0}, straight_at(0, 0), kDt, t);
+  EXPECT_NEAR(out.limited_command.speed, 0.3 * kDt, 1e-12);
+}
+
+// pils_control#3: after a sustained fault the steering loop restarts too, so the
+// correction does not jump to its pre-fault value when valid data returns.
+// A short glitch keeps the loop, like the ramp.
 TEST(AckerDiffCore, steering_loop_restarts_after_invalid_input)
 {
   for (const auto invalid : {straight_at(0, 0, NAN), straight_at(NAN, 0, 0.5)}) {
-    AckerDiffCore core;
-    core.configure(pilsbot_config());
-    double t = 100.0;
-    double correction = 0.0;
-    for (int k = 0; k < 50; ++k) {
+    for (const int fault_cycles : {1, 13}) {
+      auto config = pilsbot_config();
+      config.invalid_input_grace_period = 0.25;
+      AckerDiffCore core;
+      core.configure(config);
+      double t = 100.0;
+      double correction = 0.0;
+      for (int k = 0; k < 50; ++k) {
+        t += kDt;
+        correction =
+          core.step(AckerCommand{0.0, 0.0, 1.0}, straight_at(0, 0, 0.5), kDt, t).angular_correction;
+      }
+      ASSERT_NEAR(std::abs(correction), 1.0, 1e-9) << "loop should be saturated";
+      for (int k = 0; k < fault_cycles; ++k) {
+        t += kDt;
+        core.step(AckerCommand{0.0, 0.0, 1.0}, invalid, kDt, t);
+      }
       t += kDt;
-      correction =
-        core.step(AckerCommand{0.0, 0.0, 1.0}, straight_at(0, 0, 0.5), kDt, t).angular_correction;
+      const auto out = core.step(AckerCommand{0.0, 0.0, 1.0}, straight_at(0, 0, 0.5), kDt, t);
+      if (fault_cycles == 1) {
+        EXPECT_NEAR(std::abs(out.angular_correction), 1.0, 1e-9) << "glitch keeps the loop";
+      } else {
+        // A fresh loop is limited by max_dv (5 rad/s^2) on its first step.
+        EXPECT_LE(std::abs(out.angular_correction), 5.0 * kDt + 1e-12);
+      }
     }
-    ASSERT_NEAR(std::abs(correction), 1.0, 1e-9) << "loop should be saturated";
-    t += kDt;
-    core.step(AckerCommand{0.0, 0.0, 1.0}, invalid, kDt, t);
-    t += kDt;
-    const auto out = core.step(AckerCommand{0.0, 0.0, 1.0}, straight_at(0, 0, 0.5), kDt, t);
-    // A fresh loop is limited by max_dv (5 rad/s^2) on its first step.
-    EXPECT_LE(std::abs(out.angular_correction), 5.0 * kDt + 1e-12);
   }
 }
 
