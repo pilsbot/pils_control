@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "acker_diff_controller/acker_diff_controller.hpp"
+#include "ackermann_msgs/msg/ackermann_drive_stamped.hpp"
 #include "hardware_interface/handle.hpp"
 #include "hardware_interface/loaned_command_interface.hpp"
 #include "hardware_interface/loaned_state_interface.hpp"
@@ -72,6 +73,45 @@ protected:
     return controller_->update(
       controller_->get_node()->now(), rclcpp::Duration::from_seconds(0.02));
   }
+
+  // Configures and activates the controller, then drives it with a stamped
+  // command until the wheels turn. Returns false if they never do.
+  bool drive_forward(double speed)
+  {
+    if (controller_->get_node()->configure().id() != State::PRIMARY_STATE_INACTIVE) {
+      return false;
+    }
+    assign_interfaces();
+    if (controller_->get_node()->activate().id() != State::PRIMARY_STATE_ACTIVE) {
+      return false;
+    }
+    commander_ = std::make_shared<rclcpp::Node>("commander");
+    command_publisher_ = commander_->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>(
+      "/pilsbot_velocity_controller/cmd_vel", rclcpp::SystemDefaultsQoS());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline) {
+      send_and_update(speed);
+      if (left_velocity_ > 0.0 && right_velocity_ > 0.0) {
+        return true;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return false;
+  }
+
+  // One control cycle with a fresh stamped command (drive_forward sets up the publisher).
+  void send_and_update(double speed)
+  {
+    ackermann_msgs::msg::AckermannDriveStamped command;
+    command.header.stamp = controller_->get_node()->now();
+    command.drive.speed = speed;
+    command_publisher_->publish(command);
+    rclcpp::spin_some(controller_->get_node()->get_node_base_interface());
+    update_once();
+  }
+
+  rclcpp::Node::SharedPtr commander_;
+  rclcpp::Publisher<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr command_publisher_;
 
   double left_position_ = 0.0;
   double right_position_ = 0.0;
@@ -164,4 +204,99 @@ TEST_F(Activation, publishes_rear_axle_centre_odometry_as_base_footprint)
   EXPECT_NEAR(transform.transform.translation.x, -0.656645, kTol);
   EXPECT_NEAR(transform.transform.translation.y, -0.133108, kTol);
   EXPECT_NEAR(transform.transform.rotation.z, 0.0998334, kTol);
+}
+
+// pils_control#3: the driver writes NaN steering on hoverboard timeouts. The
+// controller must not leave the last wheel rates in the command interfaces.
+TEST_F(Activation, invalid_steering_angle_halts_the_wheels)
+{
+  ASSERT_TRUE(drive_forward(0.5)) << "the wheels never turned";
+
+  steering_position_ = NAN;
+  EXPECT_EQ(update_once(), controller_interface::return_type::ERROR);
+  EXPECT_EQ(left_velocity_, 0.0);
+  EXPECT_EQ(right_velocity_, 0.0);
+}
+
+TEST_F(Activation, invalid_wheel_position_halts_the_wheels)
+{
+  ASSERT_TRUE(drive_forward(0.5)) << "the wheels never turned";
+
+  left_position_ = NAN;
+  EXPECT_EQ(update_once(), controller_interface::return_type::ERROR);
+  EXPECT_EQ(left_velocity_, 0.0);
+  EXPECT_EQ(right_velocity_, 0.0);
+}
+
+// pils_control#3 (grace period): a one-cycle glitch halts the wheels for that
+// cycle only. The adapter must not reset the ramp, so the next valid cycle
+// continues near the previous speed instead of ramping up from standstill.
+TEST_F(Activation, short_invalid_input_glitch_keeps_the_speed)
+{
+  for (const bool steering_glitch : {true, false}) {
+    SetUp();
+    auto node = controller_->get_node();
+    node->set_parameter(rclcpp::Parameter("linear.x.has_acceleration_limits", true));
+    node->set_parameter(rclcpp::Parameter("linear.x.max_acceleration", 0.3));
+    ASSERT_TRUE(drive_forward(1.0)) << "the wheels never turned";
+    for (int k = 0; k < 25; ++k) {
+      send_and_update(1.0);
+    }
+    const double before = left_velocity_;
+    ASSERT_GT(before, 0.5) << "should have ramped up to a noticeable speed";
+
+    (steering_glitch ? steering_position_ : left_position_) = NAN;
+    EXPECT_EQ(update_once(), controller_interface::return_type::ERROR);
+    EXPECT_EQ(left_velocity_, 0.0);
+    EXPECT_EQ(right_velocity_, 0.0);
+
+    steering_position_ = 0.0;
+    left_position_ = 0.0;
+    send_and_update(1.0);
+    EXPECT_GE(left_velocity_, before) << (steering_glitch ? "steering" : "wheel") << " glitch";
+    controller_->get_node()->deactivate();
+    controller_->release_interfaces();
+  }
+}
+
+TEST_F(Activation, invalid_grace_period_fails_configure)
+{
+  for (const double grace : {-0.1, static_cast<double>(NAN)}) {
+    SetUp();
+    auto node = controller_->get_node();
+    node->set_parameter(rclcpp::Parameter("invalid_input_grace_period", grace));
+    EXPECT_NE(node->configure().id(), State::PRIMARY_STATE_INACTIVE) << grace;
+  }
+}
+
+// On invalid wheel position the wheels are halted; ~/cmd_vel_out must say so
+// rather than report the (non-zero) limited speed.
+TEST_F(Activation, limited_command_reports_the_halt_on_invalid_wheel_position)
+{
+  auto node = controller_->get_node();
+  node->set_parameter(rclcpp::Parameter("publish_limited_velocity", true));
+  ASSERT_TRUE(drive_forward(0.5)) << "the wheels never turned";
+
+  auto listener = std::make_shared<rclcpp::Node>("limited_listener");
+  ackermann_msgs::msg::AckermannDriveStamped::SharedPtr limited;
+  const rclcpp::Time halted_at = node->now();
+  auto sub = listener->create_subscription<ackermann_msgs::msg::AckermannDriveStamped>(
+    "/pilsbot_velocity_controller/cmd_vel_out", 10,
+    [&limited, halted_at](ackermann_msgs::msg::AckermannDriveStamped::SharedPtr msg) {
+      if (rclcpp::Time(msg->header.stamp) >= halted_at) {
+        limited = msg;
+      }
+    });
+
+  left_position_ = NAN;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!limited && std::chrono::steady_clock::now() < deadline) {
+    send_and_update(0.5);
+    EXPECT_EQ(left_velocity_, 0.0);
+    rclcpp::spin_some(listener);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_TRUE(limited) << "no ~/cmd_vel_out received";
+  EXPECT_EQ(limited->drive.speed, 0.0);
+  EXPECT_EQ(limited->drive.steering_angle_velocity, 0.0);
 }

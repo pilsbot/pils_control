@@ -120,6 +120,7 @@ void AckerDiffCore::reset()
   pid_controller_ = PID();
   previous_commands_ = {AckerCommand{}, AckerCommand{}};
   last_limited_linear_command_ = 0;
+  invalid_input_duration_ = 0.0;
   has_last_steering_angle_ = false;
   rear_axle_centre_ = BaseState{};
   rear_axle_centre_.pose = front_axle_to_rear_axle_centre(
@@ -142,6 +143,17 @@ void AckerDiffCore::update_rear_axle_centre(const double steering_angle, const d
     steering_angle, wheelbase);
   rear_axle_centre_.twist = front_axle_twist_to_rear_axle_centre(
     odometry_.getLinear(), odometry_.getAngular(), steering_angle, steering_rate, wheelbase);
+}
+
+void AckerDiffCore::handle_invalid_input(const double dt)
+{
+  // The wheels are halted this cycle. A short glitch keeps the ramp and the
+  // steering loop; a sustained fault resumes from standstill with a fresh loop.
+  invalid_input_duration_ += dt;
+  if (invalid_input_duration_ >= config_.invalid_input_grace_period) {
+    pid_controller_ = PID();
+    last_limited_linear_command_ = 0;
+  }
 }
 
 void AckerDiffCore::halt()
@@ -178,6 +190,7 @@ AckerDiffCore::Output AckerDiffCore::step(
   const double current_steering_angle = measurement.steering_angle;
   if (std::isnan(current_steering_angle)) {
     out.status = Status::invalid_steering_angle;
+    handle_invalid_input(dt);
     return out;
   }
 
@@ -238,11 +251,13 @@ AckerDiffCore::Output AckerDiffCore::step(
     if (std::isnan(position.left) || std::isnan(position.right)) {
       out.status = Status::invalid_wheel_position;
       update_rear_axle_centre(current_steering_angle, now);
+      handle_invalid_input(dt);
       return out;
     }
     odometry_.update(position.left, position.right, now);
   }
   update_rear_axle_centre(current_steering_angle, now);
+  invalid_input_duration_ = 0.0;
 
   out.wheel_rates = final_turning_rate;
   return out;

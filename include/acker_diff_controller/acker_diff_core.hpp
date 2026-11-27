@@ -129,6 +129,9 @@ public:
     SpeedLimiter angle_limiter;
     bool open_loop = false;
     size_t velocity_rolling_window_size = 10;
+    // Invalid input shorter than this (s) keeps the ramp and steering loop;
+    // a longer fault restarts them from standstill.
+    double invalid_input_grace_period = 0.25;
   };
 
   struct Measurement
@@ -137,6 +140,11 @@ public:
     WheelPair wheel_position;   // rad, mean per side; ignored in open loop
   };
 
+  // On any status but ok the caller must halt the wheels for this cycle
+  // (wheel_rates are 0). A fault shorter than invalid_input_grace_period keeps
+  // the linear ramp and steering loop, so a one-cycle glitch does not brake
+  // hard. Once a fault lasts the grace period, the core restarts both, so
+  // nothing jumps when valid measurements return.
   enum class Status
   {
     ok,
@@ -190,6 +198,8 @@ private:
   double last_limited_linear_command_ = 0.0;
 
   void update_rear_axle_centre(double steering_angle, double now);
+  void handle_invalid_input(double dt);
+  double invalid_input_duration_ = 0.0;  // s, accumulated dt of the current fault
   BaseState rear_axle_centre_;
   bool has_last_steering_angle_ = false;
   double last_steering_angle_ = 0.0;
