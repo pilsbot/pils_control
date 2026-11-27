@@ -317,14 +317,32 @@ TEST_F(Activation, unstamped_command_is_stored_as_a_new_message)
 }
 
 // pils_control#6: a covariance diagonal must have 6 entries; anything else
-// used to be copied unchecked into a 6-element array.
+// used to be copied unchecked into a 6-element array (more than 6 overflowed it).
 TEST_F(Activation, covariance_diagonal_of_wrong_size_fails_configure)
 {
   for (const auto & name : {"pose_covariance_diagonal", "twist_covariance_diagonal"}) {
-    SetUp();
-    auto node = controller_->get_node();
-    node->set_parameter(rclcpp::Parameter(name, std::vector<double>{1, 2, 3, 4, 5}));
-    EXPECT_NE(node->configure().id(), State::PRIMARY_STATE_INACTIVE) << name;
+    for (const auto & diagonal :
+      {std::vector<double>{1, 2, 3, 4, 5}, std::vector<double>{1, 2, 3, 4, 5, 6, 7}})
+    {
+      SetUp();
+      auto node = controller_->get_node();
+      node->set_parameter(rclcpp::Parameter(name, diagonal));
+      EXPECT_NE(node->configure().id(), State::PRIMARY_STATE_INACTIVE)
+        << name << " with " << diagonal.size() << " entries";
+    }
+  }
+}
+
+// A variance is never negative or NaN; such a diagonal is a config error.
+TEST_F(Activation, covariance_diagonal_with_negative_or_nan_entry_fails_configure)
+{
+  for (const auto & name : {"pose_covariance_diagonal", "twist_covariance_diagonal"}) {
+    for (const double bad : {-0.1, static_cast<double>(NAN)}) {
+      SetUp();
+      auto node = controller_->get_node();
+      node->set_parameter(rclcpp::Parameter(name, std::vector<double>{1, 2, bad, 4, 5, 6}));
+      EXPECT_NE(node->configure().id(), State::PRIMARY_STATE_INACTIVE) << name << " " << bad;
+    }
   }
 }
 

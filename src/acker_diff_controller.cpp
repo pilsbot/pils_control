@@ -312,7 +312,7 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
   odom_params_.odom_frame_id = get_node()->get_parameter("odom_frame_id").as_string();
   odom_params_.base_frame_id = get_node()->get_parameter("base_frame_id").as_string();
 
-  // Each diagonal has 6 entries (x, y, z, roll, pitch, yaw); unset means all 0.
+  // Each diagonal has 6 variances >= 0 (x, y, z, roll, pitch, yaw); unset means all 0.
   const auto read_diagonal =
     [this, &logger](const std::string & name, std::array<double, 6> & diagonal) {
       const auto values = get_node()->get_parameter(name).as_double_array();
@@ -324,6 +324,12 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
         RCLCPP_ERROR(logger, "'%s' needs %zu entries, got %zu",
           name.c_str(), diagonal.size(), values.size());
         return false;
+      }
+      for (const double value : values) {
+        if (!(value >= 0.0)) {
+          RCLCPP_ERROR(logger, "'%s' entries must be >= 0, got %lf", name.c_str(), value);
+          return false;
+        }
       }
       std::copy(values.begin(), values.end(), diagonal.begin());
       return true;
