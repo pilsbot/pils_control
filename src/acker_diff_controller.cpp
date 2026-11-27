@@ -312,13 +312,27 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
   odom_params_.odom_frame_id = get_node()->get_parameter("odom_frame_id").as_string();
   odom_params_.base_frame_id = get_node()->get_parameter("base_frame_id").as_string();
 
-  auto pose_diagonal = get_node()->get_parameter("pose_covariance_diagonal").as_double_array();
-  std::copy(
-    pose_diagonal.begin(), pose_diagonal.end(), odom_params_.pose_covariance_diagonal.begin());
-
-  auto twist_diagonal = get_node()->get_parameter("twist_covariance_diagonal").as_double_array();
-  std::copy(
-    twist_diagonal.begin(), twist_diagonal.end(), odom_params_.twist_covariance_diagonal.begin());
+  // Each diagonal has 6 entries (x, y, z, roll, pitch, yaw); unset means all 0.
+  const auto read_diagonal =
+    [this, &logger](const std::string & name, std::array<double, 6> & diagonal) {
+      const auto values = get_node()->get_parameter(name).as_double_array();
+      if (values.empty()) {
+        diagonal.fill(0.0);
+        return true;
+      }
+      if (values.size() != diagonal.size()) {
+        RCLCPP_ERROR(logger, "'%s' needs %zu entries, got %zu",
+          name.c_str(), diagonal.size(), values.size());
+        return false;
+      }
+      std::copy(values.begin(), values.end(), diagonal.begin());
+      return true;
+    };
+  if (!read_diagonal("pose_covariance_diagonal", odom_params_.pose_covariance_diagonal) ||
+    !read_diagonal("twist_covariance_diagonal", odom_params_.twist_covariance_diagonal))
+  {
+    return CallbackReturn::ERROR;
+  }
 
   odom_params_.open_loop = get_node()->get_parameter("open_loop").as_bool();
   odom_params_.enable_odom_tf = get_node()->get_parameter("enable_odom_tf").as_bool();
@@ -453,11 +467,11 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
           return;
         }
 
-        // Write fake header in the stored stamped command
-        std::shared_ptr<AckermannStamped> command_stamped;
-        received_command_msg_ptr_.get(command_stamped);
+        // Store a new stamped command; the stored one may be read by update() right now.
+        auto command_stamped = std::make_shared<AckermannStamped>();
         command_stamped->drive = *msg;
         command_stamped->header.stamp = get_node()->get_clock()->now();
+        received_command_msg_ptr_.set(std::move(command_stamped));
       });
   }
 

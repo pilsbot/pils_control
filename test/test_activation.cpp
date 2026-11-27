@@ -35,6 +35,18 @@ const std::string kLeft = "front_wheel_left_joint";
 const std::string kRight = "front_wheel_right_joint";
 const std::string kSteering = "steering_axle_joint";
 
+// Gives the tests a look at the command the subscriber stored for update().
+class InspectableController : public acker_diff_controller::AckerDiffController
+{
+public:
+  std::shared_ptr<ackermann_msgs::msg::AckermannDriveStamped> stored_command()
+  {
+    std::shared_ptr<ackermann_msgs::msg::AckermannDriveStamped> msg;
+    received_command_msg_ptr_.get(msg);
+    return msg;
+  }
+};
+
 class Activation : public ::testing::Test
 {
 protected:
@@ -43,7 +55,7 @@ protected:
 
   void SetUp() override
   {
-    controller_ = std::make_unique<acker_diff_controller::AckerDiffController>();
+    controller_ = std::make_unique<InspectableController>();
     ASSERT_EQ(controller_->init("pilsbot_velocity_controller"),
       controller_interface::return_type::OK);
     auto node = controller_->get_node();
@@ -127,7 +139,23 @@ protected:
   hardware_interface::CommandInterface right_velocity_command_{
     kRight, HW_IF_VELOCITY, &right_velocity_};
 
-  std::unique_ptr<acker_diff_controller::AckerDiffController> controller_;
+  // Receives one /odom message while updating the controller.
+  nav_msgs::msg::Odometry::SharedPtr receive_odometry()
+  {
+    auto listener = std::make_shared<rclcpp::Node>("odometry_listener");
+    nav_msgs::msg::Odometry::SharedPtr odom;
+    auto odom_sub = listener->create_subscription<nav_msgs::msg::Odometry>(
+      "/odom", 10, [&odom](nav_msgs::msg::Odometry::SharedPtr msg) { odom = msg; });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!odom && std::chrono::steady_clock::now() < deadline) {
+      update_once();
+      rclcpp::spin_some(listener);
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return odom;
+  }
+
+  std::unique_ptr<InspectableController> controller_;
 };
 }  // namespace
 
@@ -251,4 +279,68 @@ TEST_F(Activation, cmd_vel_timeout_stops_the_wheels_at_once)
   send_and_update(1.0);
   EXPECT_GT(left_velocity_, 0.0);
   EXPECT_LE(left_velocity_, 0.3 * 0.02 / 0.125 + 1e-9);
+}
+
+// pils_control#6: the unstamped callback edited the stored message in place
+// while update() read it. It must store a new message instead.
+TEST_F(Activation, unstamped_command_is_stored_as_a_new_message)
+{
+  auto node = controller_->get_node();
+  node->set_parameter(rclcpp::Parameter("use_stamped_vel", false));
+  ASSERT_EQ(node->configure().id(), State::PRIMARY_STATE_INACTIVE);
+  assign_interfaces();
+  ASSERT_EQ(node->activate().id(), State::PRIMARY_STATE_ACTIVE);
+  const auto before = controller_->stored_command();
+  ASSERT_TRUE(before);
+
+  auto commander = std::make_shared<rclcpp::Node>("commander");
+  auto publisher = commander->create_publisher<ackermann_msgs::msg::AckermannDrive>(
+    "/pilsbot_velocity_controller/cmd_vel_unstamped", rclcpp::SystemDefaultsQoS());
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (controller_->stored_command()->drive.speed != 0.5 &&
+    std::chrono::steady_clock::now() < deadline)
+  {
+    ackermann_msgs::msg::AckermannDrive command;
+    command.speed = 0.5;
+    publisher->publish(command);
+    rclcpp::spin_some(node->get_node_base_interface());
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  const auto after = controller_->stored_command();
+  ASSERT_EQ(after->drive.speed, 0.5) << "command never arrived";
+  EXPECT_NE(after, before) << "the stored message was edited in place";
+  EXPECT_EQ(before->drive.speed, 0.0) << "the stored message was edited in place";
+
+  ASSERT_EQ(update_once(), controller_interface::return_type::OK);
+  EXPECT_GT(left_velocity_, 0.0);
+}
+
+// pils_control#6: a covariance diagonal must have 6 entries; anything else
+// used to be copied unchecked into a 6-element array.
+TEST_F(Activation, covariance_diagonal_of_wrong_size_fails_configure)
+{
+  for (const auto & name : {"pose_covariance_diagonal", "twist_covariance_diagonal"}) {
+    SetUp();
+    auto node = controller_->get_node();
+    node->set_parameter(rclcpp::Parameter(name, std::vector<double>{1, 2, 3, 4, 5}));
+    EXPECT_NE(node->configure().id(), State::PRIMARY_STATE_INACTIVE) << name;
+  }
+}
+
+TEST_F(Activation, covariance_defaults_to_zero_and_takes_configured_diagonal)
+{
+  auto node = controller_->get_node();
+  node->set_parameter(rclcpp::Parameter(
+    "pose_covariance_diagonal", std::vector<double>{1, 2, 3, 4, 5, 6}));
+  ASSERT_EQ(node->configure().id(), State::PRIMARY_STATE_INACTIVE);
+  assign_interfaces();
+  ASSERT_EQ(node->activate().id(), State::PRIMARY_STATE_ACTIVE);
+
+  const auto odom = receive_odometry();
+  ASSERT_TRUE(odom) << "no /odom received";
+  for (size_t i = 0; i < 36; ++i) {
+    const bool diagonal = i % 7 == 0;
+    EXPECT_EQ(odom->pose.covariance[i], diagonal ? 1.0 + i / 7 : 0.0) << "pose " << i;
+    EXPECT_EQ(odom->twist.covariance[i], 0.0) << "twist " << i;
+  }
 }
