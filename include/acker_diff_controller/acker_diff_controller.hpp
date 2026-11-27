@@ -175,7 +175,15 @@ protected:
 
   bool use_stamped_vel_ = true;
 
+  // Invalid input shorter than this (s) keeps the ramp and steering loop.
+  double invalid_input_grace_period_ = 0.25;
+
   bool reset();
+  // Halts the wheels and forgets the linear ramp (deactivation).
   void halt();
+  // Halts the wheels for this cycle only; the core keeps or restarts its state.
+  void halt_wheels();
+  void publish_limited_command(
+    const rclcpp::Time & current_time, const AckerDiffCore::Output & out);
 };
 }  // namespace acker_diff_controller
