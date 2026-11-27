@@ -223,9 +223,13 @@ AckerDiffCore::Output AckerDiffCore::step(
     out.linear_stopped = true;
   }
 
-  // limit linear acceleration
-  config_.linear_limiter.limit_velocity(linear_command);  // only needed if logic earlier would also increase speed
-  config_.linear_limiter.limit_acceleration(linear_command, last_limited_linear_command_, dt);
+  if (command.hard_stop) {
+    linear_command = 0;
+  } else {
+    // limit linear acceleration
+    config_.linear_limiter.limit_velocity(linear_command);  // only needed if logic earlier would also increase speed
+    config_.linear_limiter.limit_acceleration(linear_command, last_limited_linear_command_, dt);
+  }
 
   last_limited_linear_command_ = linear_command;
   out.limited_command.speed = linear_command;

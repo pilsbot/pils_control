@@ -90,18 +90,24 @@ protected:
       "/pilsbot_velocity_controller/cmd_vel", rclcpp::SystemDefaultsQoS());
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (std::chrono::steady_clock::now() < deadline) {
-      ackermann_msgs::msg::AckermannDriveStamped command;
-      command.header.stamp = controller_->get_node()->now();
-      command.drive.speed = speed;
-      command_publisher_->publish(command);
-      rclcpp::spin_some(controller_->get_node()->get_node_base_interface());
-      update_once();
+      send_and_update(speed);
       if (left_velocity_ > 0.0 && right_velocity_ > 0.0) {
         return true;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     return false;
+  }
+
+  // One control cycle with a fresh stamped command (drive_forward sets up the publisher).
+  void send_and_update(double speed)
+  {
+    ackermann_msgs::msg::AckermannDriveStamped command;
+    command.header.stamp = controller_->get_node()->now();
+    command.drive.speed = speed;
+    command_publisher_->publish(command);
+    rclcpp::spin_some(controller_->get_node()->get_node_base_interface());
+    update_once();
   }
 
   rclcpp::Node::SharedPtr commander_;
@@ -220,4 +226,29 @@ TEST_F(Activation, invalid_wheel_position_halts_the_wheels)
   EXPECT_EQ(update_once(), controller_interface::return_type::ERROR);
   EXPECT_EQ(left_velocity_, 0.0);
   EXPECT_EQ(right_velocity_, 0.0);
+}
+
+// pils_control#4: on a cmd_vel timeout (e.g. gamepad link loss) the robot must
+// stop at once, not ramp down at linear.x.max_acceleration.
+TEST_F(Activation, cmd_vel_timeout_stops_the_wheels_at_once)
+{
+  auto node = controller_->get_node();
+  node->set_parameter(rclcpp::Parameter("cmd_vel_timeout", 0.1));
+  node->set_parameter(rclcpp::Parameter("linear.x.has_acceleration_limits", true));
+  node->set_parameter(rclcpp::Parameter("linear.x.max_acceleration", 0.3));
+  ASSERT_TRUE(drive_forward(1.0)) << "the wheels never turned";
+  for (int k = 0; k < 25; ++k) {
+    send_and_update(1.0);
+  }
+  ASSERT_GT(left_velocity_, 0.5) << "should have ramped up to a noticeable speed";
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(150));  // past the timeout
+  EXPECT_EQ(update_once(), controller_interface::return_type::OK);
+  EXPECT_EQ(left_velocity_, 0.0);
+  EXPECT_EQ(right_velocity_, 0.0);
+
+  // A fresh command after the timeout ramps up from standstill again.
+  send_and_update(1.0);
+  EXPECT_GT(left_velocity_, 0.0);
+  EXPECT_LE(left_velocity_, 0.3 * 0.02 / 0.125 + 1e-9);
 }

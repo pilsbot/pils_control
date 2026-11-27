@@ -157,13 +157,6 @@ controller_interface::return_type AckerDiffController::update(
     return controller_interface::return_type::ERROR;
   }
 
-  const auto message_dt = get_node()->get_clock()->now() - last_msg->header.stamp;
-  // Brake if cmd_vel has timed out, override the stored command
-  if (message_dt > cmd_vel_timeout_)
-  {
-    last_msg->drive.speed = 0;
-    last_msg->drive.steering_angle_velocity = 0;
-  }
 
   // Stamps use the controller manager's time (ROS time), not a steady clock,
   // so odometry and TF line up with the rest of the system.
@@ -185,9 +178,19 @@ controller_interface::return_type AckerDiffController::update(
     measurement.wheel_position.right /= wheel_params_.wheels_per_side;
   }
 
-  const AckerCommand command{
+  AckerCommand command{
     last_msg->drive.speed, last_msg->drive.steering_angle,
     last_msg->drive.steering_angle_velocity};
+  // Stop hard if cmd_vel has timed out (e.g. gamepad link loss): no ramp-down
+  // at linear.x.max_acceleration, and the steering loop goes passive. The
+  // stored message is shared with the subscriber callback, so leave it alone.
+  const auto message_dt = get_node()->get_clock()->now() - last_msg->header.stamp;
+  if (message_dt > cmd_vel_timeout_)
+  {
+    command.speed = 0;
+    command.steering_angle_velocity = 0;
+    command.hard_stop = true;
+  }
   const auto out = core_.step(command, measurement, update_dt.seconds(), current_time.seconds());
 
   if (out.status == AckerDiffCore::Status::invalid_steering_angle) {
