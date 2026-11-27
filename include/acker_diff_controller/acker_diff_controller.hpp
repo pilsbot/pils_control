@@ -133,8 +133,8 @@ protected:
     bool enable_odom_tf = true;
     std::string base_frame_id = "base_footprint";
     std::string odom_frame_id = "odom";
-    std::array<double, 6> pose_covariance_diagonal;
-    std::array<double, 6> twist_covariance_diagonal;
+    std::array<double, 6> pose_covariance_diagonal{};
+    std::array<double, 6> twist_covariance_diagonal{};
   } odom_params_;
 
   PID::Settings pid_params_ = PID::Settings{
