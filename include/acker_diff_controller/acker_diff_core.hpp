@@ -115,6 +115,9 @@ struct AckerCommand
   double speed = 0.0;                    // m/s
   double steering_angle = 0.0;           // rad
   double steering_angle_velocity = 0.0;  // rad/s, authority given to the steering loop
+  // Stop at once: linear speed 0 this cycle, bypassing the linear acceleration
+  // and jerk limits (used on a command timeout). Steering is unaffected.
+  bool hard_stop = false;
 };
 
 class AckerDiffCore

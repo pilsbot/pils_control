@@ -163,6 +163,11 @@ protected:
   rclcpp::Subscription<Ackermann>::SharedPtr command_unstamped_subscriber_ = nullptr;
 
   realtime_tools::RealtimeBox<std::shared_ptr<AckermannStamped>> received_command_msg_ptr_{nullptr};
+  // The last command that timed out, and its stamp then. Held (not just
+  // compared by address) so a new message cannot reuse its address and
+  // inherit the timeout.
+  std::shared_ptr<AckermannStamped> timed_out_msg_;
+  rclcpp::Time timed_out_stamp_{0, 0, RCL_ROS_TIME};
 
   // speed limiters, handed to the core on configure
   SpeedLimiter limiter_linear_;

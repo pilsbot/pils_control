@@ -276,6 +276,32 @@ TEST(AckerDiffCore, steering_loop_restarts_after_invalid_input)
   }
 }
 
+// pils_control#4: a hard stop (cmd_vel timeout) bypasses the linear limits.
+TEST(AckerDiffCore, hard_stop_bypasses_the_acceleration_limit)
+{
+  AckerDiffCore core;
+  core.configure(pilsbot_config());
+  double t = 100.0;
+  for (int k = 0; k < 100; ++k) {
+    t += kDt;
+    core.step(AckerCommand{1.0, 0.3, 1.0}, straight_at(0, 0, 0.3), kDt, t);
+  }
+
+  AckerCommand stop{0.0, 0.3, 0.0};
+  stop.hard_stop = true;
+  t += kDt;
+  const auto out = core.step(stop, straight_at(0, 0, 0.3), kDt, t);
+  EXPECT_EQ(out.status, AckerDiffCore::Status::ok);
+  EXPECT_EQ(out.limited_command.speed, 0.0);
+  EXPECT_EQ(out.wheel_rates.left, 0.0);
+  EXPECT_EQ(out.wheel_rates.right, 0.0);
+
+  // The next normal command ramps up from standstill.
+  t += kDt;
+  const auto resumed = core.step(AckerCommand{1.0, 0.3, 1.0}, straight_at(0, 0, 0.3), kDt, t);
+  EXPECT_NEAR(resumed.limited_command.speed, 0.3 * kDt, 1e-12);
+}
+
 TEST(AckerDiffCore, open_loop_odometry_ignores_wheel_positions)
 {
   auto config = pilsbot_config();
