@@ -82,6 +82,7 @@ CallbackReturn AckerDiffController::on_init()
     auto_declare<double>("cmd_vel_timeout", cmd_vel_timeout_.count() / 1000.0);
     auto_declare<bool>("publish_limited_velocity", publish_limited_velocity_);
     auto_declare<int>("velocity_rolling_window_size", 10);
+    auto_declare<double>("invalid_input_grace_period", invalid_input_grace_period_);
     auto_declare<bool>("use_stamped_vel", use_stamped_vel_);
 
     auto_declare<bool>  ("linear.x.has_velocity_limits", false);
@@ -184,9 +185,16 @@ controller_interface::return_type AckerDiffController::update(
   // Stop hard if cmd_vel has timed out (e.g. gamepad link loss): no ramp-down
   // at linear.x.max_acceleration, and the steering loop goes passive. The
   // stored message is shared with the subscriber callback, so leave it alone.
-  const auto message_dt = get_node()->get_clock()->now() - last_msg->header.stamp;
-  if (message_dt > cmd_vel_timeout_)
+  // The timeout is latched per message (pointer and stamp): if ROS time steps
+  // backwards, a timed-out command must not become fresh again. Only a new
+  // message, or a new stamp on the stored one, lifts it.
+  const rclcpp::Time stamp(last_msg->header.stamp);
+  const bool latched = last_msg == timed_out_msg_ && stamp == timed_out_stamp_;
+  const auto message_dt = get_node()->get_clock()->now() - stamp;
+  if (latched || message_dt > cmd_vel_timeout_)
   {
+    timed_out_msg_ = last_msg;
+    timed_out_stamp_ = stamp;
     command.speed = 0;
     command.steering_angle_velocity = 0;
     command.hard_stop = true;
@@ -196,8 +204,10 @@ controller_interface::return_type AckerDiffController::update(
   if (out.status == AckerDiffCore::Status::invalid_steering_angle) {
     RCLCPP_ERROR_THROTTLE(logger, *get_node()->get_clock(), 1000,
         "Could not get current steering angle! Halting the wheels.");
-    // Humble's controller manager ignores the return value: stop here.
-    halt();
+    // Humble's controller manager ignores the return value: stop here. The core
+    // decides whether the ramp survives (invalid_input_grace_period).
+    halt_wheels();
+    publish_limited_command(current_time, out);
     return controller_interface::return_type::ERROR;
   }
 
@@ -216,22 +226,12 @@ controller_interface::return_type AckerDiffController::update(
     );
   }
 
-  //    Publish limited velocity
-  if (publish_limited_velocity_ && realtime_limited_command_publisher_->trylock())
-  {
-    auto & limited_velocity_command = realtime_limited_command_publisher_->msg_;
-    limited_velocity_command.header.stamp = current_time;
-    limited_velocity_command.drive.speed = out.limited_command.speed;
-    limited_velocity_command.drive.steering_angle = out.limited_command.steering_angle;
-    limited_velocity_command.drive.steering_angle_velocity =
-      out.limited_command.steering_angle_velocity;
-    realtime_limited_command_publisher_->unlockAndPublish();
-  }
+  publish_limited_command(current_time, out);
 
   if (out.status == AckerDiffCore::Status::invalid_wheel_position) {
     RCLCPP_ERROR_THROTTLE(logger, *get_node()->get_clock(), 1000,
         "Either the left or right wheel position is invalid! Halting the wheels.");
-    halt();
+    halt_wheels();
     return controller_interface::return_type::ERROR;
   }
 
@@ -326,6 +326,13 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
   cmd_vel_timeout_ = std::chrono::milliseconds{
     static_cast<int>(get_node()->get_parameter("cmd_vel_timeout").as_double() * 1000.0)};
   publish_limited_velocity_ = get_node()->get_parameter("publish_limited_velocity").as_bool();
+  invalid_input_grace_period_ =
+    get_node()->get_parameter("invalid_input_grace_period").as_double();
+  if (!(invalid_input_grace_period_ >= 0.0)) {
+    RCLCPP_ERROR(logger, "invalid_input_grace_period '%lf' must be >= 0 s",
+      invalid_input_grace_period_);
+    return CallbackReturn::ERROR;
+  }
   use_stamped_vel_ = get_node()->get_parameter("use_stamped_vel").as_bool();
 
   try
@@ -398,7 +405,7 @@ CallbackReturn AckerDiffController::on_configure(const rclcpp_lifecycle::State &
       wheel_params_.separation_multiplier, wheel_params_.left_radius_multiplier,
       wheel_params_.right_radius_multiplier},
     steering_params_, pid_params_, limiter_linear_, limiter_angle_,
-    odom_params_.open_loop, velocity_rolling_window_size_});
+    odom_params_.open_loop, velocity_rolling_window_size_, invalid_input_grace_period_});
 
   if (!reset())
   {
@@ -582,6 +589,7 @@ bool AckerDiffController::reset()
   command_unstamped_subscriber_.reset();
 
   received_command_msg_ptr_.set(nullptr);
+  timed_out_msg_.reset();
   return true;
 }
 
@@ -592,17 +600,39 @@ CallbackReturn AckerDiffController::on_shutdown(const rclcpp_lifecycle::State &)
 
 void AckerDiffController::halt()
 {
-  const auto halt_wheels = [](auto & wheel_handles) {
+  core_.halt();
+  halt_wheels();
+}
+
+void AckerDiffController::halt_wheels()
+{
+  const auto halt_side = [](auto & wheel_handles) {
     for (const auto & wheel_handle : wheel_handles)
     {
       wheel_handle.velocity.get().set_value(0.0);
     }
   };
 
-  core_.halt();
+  halt_side(registered_left_wheel_handles_);
+  halt_side(registered_right_wheel_handles_);
+}
 
-  halt_wheels(registered_left_wheel_handles_);
-  halt_wheels(registered_right_wheel_handles_);
+void AckerDiffController::publish_limited_command(
+  const rclcpp::Time & current_time, const AckerDiffCore::Output & out)
+{
+  if (!publish_limited_velocity_ || !realtime_limited_command_publisher_->trylock())
+  {
+    return;
+  }
+  // Publish what the wheels actually get: on invalid input they are halted.
+  const bool halted = out.status != AckerDiffCore::Status::ok;
+  auto & limited_velocity_command = realtime_limited_command_publisher_->msg_;
+  limited_velocity_command.header.stamp = current_time;
+  limited_velocity_command.drive.speed = halted ? 0.0 : out.limited_command.speed;
+  limited_velocity_command.drive.steering_angle = out.limited_command.steering_angle;
+  limited_velocity_command.drive.steering_angle_velocity =
+    halted ? 0.0 : out.limited_command.steering_angle_velocity;
+  realtime_limited_command_publisher_->unlockAndPublish();
 }
 
 CallbackReturn AckerDiffController::configure_side(

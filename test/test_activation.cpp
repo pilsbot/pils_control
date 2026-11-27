@@ -22,6 +22,7 @@
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "rosgraph_msgs/msg/clock.hpp"
 #include "tf2_msgs/msg/tf_message.hpp"
 #include "rclcpp/rclcpp.hpp"
 
@@ -251,4 +252,144 @@ TEST_F(Activation, cmd_vel_timeout_stops_the_wheels_at_once)
   send_and_update(1.0);
   EXPECT_GT(left_velocity_, 0.0);
   EXPECT_LE(left_velocity_, 0.3 * 0.02 / 0.125 + 1e-9);
+}
+
+// pils_control#4: once a command has timed out it stays timed out, even if ROS
+// time steps backwards (e.g. a restarted bag or simulation) and its stamp looks
+// fresh again. Only a new message lifts the timeout.
+TEST_F(Activation, timed_out_command_stays_timed_out_when_time_steps_back)
+{
+  auto node = controller_->get_node();
+  node->set_parameter(rclcpp::Parameter("use_sim_time", true));
+  auto clock_node = std::make_shared<rclcpp::Node>("clock_source");
+  auto clock_publisher = clock_node->create_publisher<rosgraph_msgs::msg::Clock>(
+    "/clock", rclcpp::ClockQoS());
+  const auto set_time = [&](double seconds) {
+    rosgraph_msgs::msg::Clock clock;
+    clock.clock = rclcpp::Time(static_cast<int64_t>(seconds * 1e9), RCL_ROS_TIME);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (node->now() != rclcpp::Time(clock.clock, RCL_ROS_TIME) &&
+      std::chrono::steady_clock::now() < deadline)
+    {
+      clock_publisher->publish(clock);
+      rclcpp::spin_some(node->get_node_base_interface());
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return node->now() == rclcpp::Time(clock.clock, RCL_ROS_TIME);
+  };
+  ASSERT_TRUE(set_time(1000.0)) << "sim time never arrived";
+  ASSERT_TRUE(drive_forward(0.5)) << "the wheels never turned";
+
+  ASSERT_TRUE(set_time(1001.0));  // past the 0.5 s timeout
+  EXPECT_EQ(update_once(), controller_interface::return_type::OK);
+  EXPECT_EQ(left_velocity_, 0.0);
+
+  ASSERT_TRUE(set_time(1000.1));  // time steps back: the stamp looks fresh again
+  EXPECT_EQ(update_once(), controller_interface::return_type::OK);
+  EXPECT_EQ(left_velocity_, 0.0) << "the timed-out command came back";
+  EXPECT_EQ(right_velocity_, 0.0) << "the timed-out command came back";
+
+  // A new message lifts the timeout.
+  send_and_update(0.5);
+  EXPECT_GT(left_velocity_, 0.0);
+}
+
+// The timeout latch must not swallow unstamped commands: on this branch the
+// unstamped callback still writes into the stored message (pils_control#6).
+TEST_F(Activation, unstamped_command_lifts_the_timeout)
+{
+  auto node = controller_->get_node();
+  node->set_parameter(rclcpp::Parameter("use_stamped_vel", false));
+  ASSERT_EQ(node->configure().id(), State::PRIMARY_STATE_INACTIVE);
+  assign_interfaces();
+  ASSERT_EQ(node->activate().id(), State::PRIMARY_STATE_ACTIVE);
+  ASSERT_EQ(update_once(), controller_interface::return_type::OK);  // empty command: timed out
+  EXPECT_EQ(left_velocity_, 0.0);
+
+  auto commander = std::make_shared<rclcpp::Node>("commander");
+  auto publisher = commander->create_publisher<ackermann_msgs::msg::AckermannDrive>(
+    "/pilsbot_velocity_controller/cmd_vel_unstamped", rclcpp::SystemDefaultsQoS());
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (left_velocity_ <= 0.0 && std::chrono::steady_clock::now() < deadline) {
+    ackermann_msgs::msg::AckermannDrive command;
+    command.speed = 0.5;
+    publisher->publish(command);
+    rclcpp::spin_some(node->get_node_base_interface());
+    update_once();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  EXPECT_GT(left_velocity_, 0.0) << "unstamped command never lifted the timeout";
+}
+
+// pils_control#3 (grace period): a one-cycle glitch halts the wheels for that
+// cycle only. The adapter must not reset the ramp, so the next valid cycle
+// continues near the previous speed instead of ramping up from standstill.
+TEST_F(Activation, short_invalid_input_glitch_keeps_the_speed)
+{
+  for (const bool steering_glitch : {true, false}) {
+    SetUp();
+    auto node = controller_->get_node();
+    node->set_parameter(rclcpp::Parameter("linear.x.has_acceleration_limits", true));
+    node->set_parameter(rclcpp::Parameter("linear.x.max_acceleration", 0.3));
+    ASSERT_TRUE(drive_forward(1.0)) << "the wheels never turned";
+    for (int k = 0; k < 25; ++k) {
+      send_and_update(1.0);
+    }
+    const double before = left_velocity_;
+    ASSERT_GT(before, 0.5) << "should have ramped up to a noticeable speed";
+
+    (steering_glitch ? steering_position_ : left_position_) = NAN;
+    EXPECT_EQ(update_once(), controller_interface::return_type::ERROR);
+    EXPECT_EQ(left_velocity_, 0.0);
+    EXPECT_EQ(right_velocity_, 0.0);
+
+    steering_position_ = 0.0;
+    left_position_ = 0.0;
+    send_and_update(1.0);
+    EXPECT_GE(left_velocity_, before) << (steering_glitch ? "steering" : "wheel") << " glitch";
+    controller_->get_node()->deactivate();
+    controller_->release_interfaces();
+  }
+}
+
+TEST_F(Activation, invalid_grace_period_fails_configure)
+{
+  for (const double grace : {-0.1, static_cast<double>(NAN)}) {
+    SetUp();
+    auto node = controller_->get_node();
+    node->set_parameter(rclcpp::Parameter("invalid_input_grace_period", grace));
+    EXPECT_NE(node->configure().id(), State::PRIMARY_STATE_INACTIVE) << grace;
+  }
+}
+
+// On invalid wheel position the wheels are halted; ~/cmd_vel_out must say so
+// rather than report the (non-zero) limited speed.
+TEST_F(Activation, limited_command_reports_the_halt_on_invalid_wheel_position)
+{
+  auto node = controller_->get_node();
+  node->set_parameter(rclcpp::Parameter("publish_limited_velocity", true));
+  ASSERT_TRUE(drive_forward(0.5)) << "the wheels never turned";
+
+  auto listener = std::make_shared<rclcpp::Node>("limited_listener");
+  ackermann_msgs::msg::AckermannDriveStamped::SharedPtr limited;
+  const rclcpp::Time halted_at = node->now();
+  auto sub = listener->create_subscription<ackermann_msgs::msg::AckermannDriveStamped>(
+    "/pilsbot_velocity_controller/cmd_vel_out", 10,
+    [&limited, halted_at](ackermann_msgs::msg::AckermannDriveStamped::SharedPtr msg) {
+      if (rclcpp::Time(msg->header.stamp) >= halted_at) {
+        limited = msg;
+      }
+    });
+
+  left_position_ = NAN;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!limited && std::chrono::steady_clock::now() < deadline) {
+    send_and_update(0.5);
+    EXPECT_EQ(left_velocity_, 0.0);
+    rclcpp::spin_some(listener);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_TRUE(limited) << "no ~/cmd_vel_out received";
+  EXPECT_EQ(limited->drive.speed, 0.0);
+  EXPECT_EQ(limited->drive.steering_angle_velocity, 0.0);
 }
