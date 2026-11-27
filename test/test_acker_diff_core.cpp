@@ -161,6 +161,51 @@ TEST(AckerDiffCore, invalid_wheel_position_keeps_odometry)
   EXPECT_EQ(core.odometry().getX(), 0.0);
 }
 
+// pils_control#3: the adapter halts the wheels on invalid input, so the core
+// must not resume from the speed it had before. The ramp restarts from zero.
+TEST(AckerDiffCore, linear_ramp_restarts_after_invalid_input)
+{
+  for (const auto invalid : {straight_at(0, 0, NAN), straight_at(NAN, 0)}) {
+    AckerDiffCore core;
+    core.configure(pilsbot_config());
+    double t = 100.0;
+    for (int k = 0; k < 50; ++k) {
+      t += kDt;
+      core.step(AckerCommand{1.0, 0.0, 0.0}, straight_at(0, 0), kDt, t);
+    }
+    t += kDt;
+    EXPECT_NE(core.step(AckerCommand{1.0, 0.0, 0.0}, invalid, kDt, t).status,
+      AckerDiffCore::Status::ok);
+    t += kDt;
+    const auto out = core.step(AckerCommand{1.0, 0.0, 0.0}, straight_at(0, 0), kDt, t);
+    EXPECT_NEAR(out.limited_command.speed, 0.3 * kDt, 1e-12);
+  }
+}
+
+// pils_control#3: the steering loop restarts too, so the correction does not
+// jump to its pre-fault value when valid data returns.
+TEST(AckerDiffCore, steering_loop_restarts_after_invalid_input)
+{
+  for (const auto invalid : {straight_at(0, 0, NAN), straight_at(NAN, 0, 0.5)}) {
+    AckerDiffCore core;
+    core.configure(pilsbot_config());
+    double t = 100.0;
+    double correction = 0.0;
+    for (int k = 0; k < 50; ++k) {
+      t += kDt;
+      correction =
+        core.step(AckerCommand{0.0, 0.0, 1.0}, straight_at(0, 0, 0.5), kDt, t).angular_correction;
+    }
+    ASSERT_NEAR(std::abs(correction), 1.0, 1e-9) << "loop should be saturated";
+    t += kDt;
+    core.step(AckerCommand{0.0, 0.0, 1.0}, invalid, kDt, t);
+    t += kDt;
+    const auto out = core.step(AckerCommand{0.0, 0.0, 1.0}, straight_at(0, 0, 0.5), kDt, t);
+    // A fresh loop is limited by max_dv (5 rad/s^2) on its first step.
+    EXPECT_LE(std::abs(out.angular_correction), 5.0 * kDt + 1e-12);
+  }
+}
+
 TEST(AckerDiffCore, open_loop_odometry_ignores_wheel_positions)
 {
   auto config = pilsbot_config();

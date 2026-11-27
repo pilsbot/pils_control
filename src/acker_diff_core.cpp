@@ -144,6 +144,13 @@ void AckerDiffCore::update_rear_axle_centre(const double steering_angle, const d
     odometry_.getLinear(), odometry_.getAngular(), steering_angle, steering_rate, wheelbase);
 }
 
+void AckerDiffCore::restart_after_invalid_input()
+{
+  // The wheels are halted; resume from standstill with a fresh steering loop.
+  pid_controller_ = PID();
+  last_limited_linear_command_ = 0;
+}
+
 void AckerDiffCore::halt()
 {
   last_limited_linear_command_ = 0;
@@ -178,6 +185,7 @@ AckerDiffCore::Output AckerDiffCore::step(
   const double current_steering_angle = measurement.steering_angle;
   if (std::isnan(current_steering_angle)) {
     out.status = Status::invalid_steering_angle;
+    restart_after_invalid_input();
     return out;
   }
 
@@ -238,6 +246,7 @@ AckerDiffCore::Output AckerDiffCore::step(
     if (std::isnan(position.left) || std::isnan(position.right)) {
       out.status = Status::invalid_wheel_position;
       update_rear_axle_centre(current_steering_angle, now);
+      restart_after_invalid_input();
       return out;
     }
     odometry_.update(position.left, position.right, now);

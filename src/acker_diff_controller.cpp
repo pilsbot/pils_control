@@ -192,7 +192,9 @@ controller_interface::return_type AckerDiffController::update(
 
   if (out.status == AckerDiffCore::Status::invalid_steering_angle) {
     RCLCPP_ERROR_THROTTLE(logger, *get_node()->get_clock(), 1000,
-        "Could not get current steering angle!");
+        "Could not get current steering angle! Halting the wheels.");
+    // Humble's controller manager ignores the return value: stop here.
+    halt();
     return controller_interface::return_type::ERROR;
   }
 
@@ -224,7 +226,9 @@ controller_interface::return_type AckerDiffController::update(
   }
 
   if (out.status == AckerDiffCore::Status::invalid_wheel_position) {
-    RCLCPP_ERROR(get_node()->get_logger(), "Either the left or right wheel position is invalid");
+    RCLCPP_ERROR_THROTTLE(logger, *get_node()->get_clock(), 1000,
+        "Either the left or right wheel position is invalid! Halting the wheels.");
+    halt();
     return controller_interface::return_type::ERROR;
   }
 

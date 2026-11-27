@@ -137,6 +137,9 @@ public:
     WheelPair wheel_position;   // rad, mean per side; ignored in open loop
   };
 
+  // On any status but ok the caller must halt the wheels (wheel_rates are 0).
+  // The core then restarts its steering loop and linear ramp, so nothing jumps
+  // when valid measurements return.
   enum class Status
   {
     ok,
@@ -190,6 +193,7 @@ private:
   double last_limited_linear_command_ = 0.0;
 
   void update_rear_axle_centre(double steering_angle, double now);
+  void restart_after_invalid_input();
   BaseState rear_axle_centre_;
   bool has_last_steering_angle_ = false;
   double last_steering_angle_ = 0.0;
