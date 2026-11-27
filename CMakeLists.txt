@@ -101,6 +101,7 @@ ament_export_libraries(
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(rosgraph_msgs REQUIRED)
 
   ament_add_gtest(test_characterisation test/test_characterisation.cpp)
   target_link_libraries(test_characterisation acker_diff_core)
@@ -114,7 +115,8 @@ if(BUILD_TESTING)
   ament_add_gtest(test_activation test/test_activation.cpp)
   target_include_directories(test_activation PRIVATE include)
   target_link_libraries(test_activation acker_diff_controller)
-  ament_target_dependencies(test_activation rclcpp controller_interface hardware_interface)
+  ament_target_dependencies(test_activation
+    rclcpp controller_interface hardware_interface rosgraph_msgs)
 endif()
 
 ament_package()

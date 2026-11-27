@@ -185,9 +185,16 @@ controller_interface::return_type AckerDiffController::update(
   // Stop hard if cmd_vel has timed out (e.g. gamepad link loss): no ramp-down
   // at linear.x.max_acceleration, and the steering loop goes passive. The
   // stored message is shared with the subscriber callback, so leave it alone.
-  const auto message_dt = get_node()->get_clock()->now() - last_msg->header.stamp;
-  if (message_dt > cmd_vel_timeout_)
+  // The timeout is latched per message (pointer and stamp): if ROS time steps
+  // backwards, a timed-out command must not become fresh again. Only a new
+  // message, or a new stamp on the stored one, lifts it.
+  const rclcpp::Time stamp(last_msg->header.stamp);
+  const bool latched = last_msg == timed_out_msg_ && stamp == timed_out_stamp_;
+  const auto message_dt = get_node()->get_clock()->now() - stamp;
+  if (latched || message_dt > cmd_vel_timeout_)
   {
+    timed_out_msg_ = last_msg;
+    timed_out_stamp_ = stamp;
     command.speed = 0;
     command.steering_angle_velocity = 0;
     command.hard_stop = true;
@@ -582,6 +589,7 @@ bool AckerDiffController::reset()
   command_unstamped_subscriber_.reset();
 
   received_command_msg_ptr_.set(nullptr);
+  timed_out_msg_.reset();
   return true;
 }
 

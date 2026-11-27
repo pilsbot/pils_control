@@ -22,6 +22,7 @@
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "rosgraph_msgs/msg/clock.hpp"
 #include "tf2_msgs/msg/tf_message.hpp"
 #include "rclcpp/rclcpp.hpp"
 
@@ -251,6 +252,73 @@ TEST_F(Activation, cmd_vel_timeout_stops_the_wheels_at_once)
   send_and_update(1.0);
   EXPECT_GT(left_velocity_, 0.0);
   EXPECT_LE(left_velocity_, 0.3 * 0.02 / 0.125 + 1e-9);
+}
+
+// pils_control#4: once a command has timed out it stays timed out, even if ROS
+// time steps backwards (e.g. a restarted bag or simulation) and its stamp looks
+// fresh again. Only a new message lifts the timeout.
+TEST_F(Activation, timed_out_command_stays_timed_out_when_time_steps_back)
+{
+  auto node = controller_->get_node();
+  node->set_parameter(rclcpp::Parameter("use_sim_time", true));
+  auto clock_node = std::make_shared<rclcpp::Node>("clock_source");
+  auto clock_publisher = clock_node->create_publisher<rosgraph_msgs::msg::Clock>(
+    "/clock", rclcpp::ClockQoS());
+  const auto set_time = [&](double seconds) {
+    rosgraph_msgs::msg::Clock clock;
+    clock.clock = rclcpp::Time(static_cast<int64_t>(seconds * 1e9), RCL_ROS_TIME);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (node->now() != rclcpp::Time(clock.clock, RCL_ROS_TIME) &&
+      std::chrono::steady_clock::now() < deadline)
+    {
+      clock_publisher->publish(clock);
+      rclcpp::spin_some(node->get_node_base_interface());
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return node->now() == rclcpp::Time(clock.clock, RCL_ROS_TIME);
+  };
+  ASSERT_TRUE(set_time(1000.0)) << "sim time never arrived";
+  ASSERT_TRUE(drive_forward(0.5)) << "the wheels never turned";
+
+  ASSERT_TRUE(set_time(1001.0));  // past the 0.5 s timeout
+  EXPECT_EQ(update_once(), controller_interface::return_type::OK);
+  EXPECT_EQ(left_velocity_, 0.0);
+
+  ASSERT_TRUE(set_time(1000.1));  // time steps back: the stamp looks fresh again
+  EXPECT_EQ(update_once(), controller_interface::return_type::OK);
+  EXPECT_EQ(left_velocity_, 0.0) << "the timed-out command came back";
+  EXPECT_EQ(right_velocity_, 0.0) << "the timed-out command came back";
+
+  // A new message lifts the timeout.
+  send_and_update(0.5);
+  EXPECT_GT(left_velocity_, 0.0);
+}
+
+// The timeout latch must not swallow unstamped commands: on this branch the
+// unstamped callback still writes into the stored message (pils_control#6).
+TEST_F(Activation, unstamped_command_lifts_the_timeout)
+{
+  auto node = controller_->get_node();
+  node->set_parameter(rclcpp::Parameter("use_stamped_vel", false));
+  ASSERT_EQ(node->configure().id(), State::PRIMARY_STATE_INACTIVE);
+  assign_interfaces();
+  ASSERT_EQ(node->activate().id(), State::PRIMARY_STATE_ACTIVE);
+  ASSERT_EQ(update_once(), controller_interface::return_type::OK);  // empty command: timed out
+  EXPECT_EQ(left_velocity_, 0.0);
+
+  auto commander = std::make_shared<rclcpp::Node>("commander");
+  auto publisher = commander->create_publisher<ackermann_msgs::msg::AckermannDrive>(
+    "/pilsbot_velocity_controller/cmd_vel_unstamped", rclcpp::SystemDefaultsQoS());
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (left_velocity_ <= 0.0 && std::chrono::steady_clock::now() < deadline) {
+    ackermann_msgs::msg::AckermannDrive command;
+    command.speed = 0.5;
+    publisher->publish(command);
+    rclcpp::spin_some(node->get_node_base_interface());
+    update_once();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  EXPECT_GT(left_velocity_, 0.0) << "unstamped command never lifted the timeout";
 }
 
 // pils_control#3 (grace period): a one-cycle glitch halts the wheels for that
