@@ -217,8 +217,13 @@ AckerDiffCore::Output AckerDiffCore::step(
   }
   out.angular_correction = angular_correction;
 
-  // reduce linear speed if the steering error is too big
-  if (std::abs(angular_correction) > config_.steering.limit_linear_at_angle_diff_to_setpoint) {
+  // Stop linear motion while the steering is too far from its setpoint, so
+  // the steering loop can catch up first. Only while the loop is active: a
+  // passive setpoint is not tracked, so its error means nothing.
+  out.steering_error = angle_command - current_steering_angle;
+  if (angular_command > 0 &&
+    std::abs(out.steering_error) > config_.steering.limit_linear_at_angle_diff_to_setpoint)
+  {
     linear_command = 0;
     out.linear_stopped = true;
   }

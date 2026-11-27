@@ -210,9 +210,9 @@ controller_interface::return_type AckerDiffController::update(
   }
   if (out.linear_stopped) {
     RCLCPP_DEBUG(logger,
-        "Difference angular_correction '%lf' vs angular_command '%lf' too big! "
-        "Stopping linear motion.", std::abs(out.angular_correction),
-        out.limited_command.steering_angle_velocity
+        "Steering error '%lf' rad exceeds max_angle_setpoint_diff '%lf' rad! "
+        "Stopping linear motion.", out.steering_error,
+        steering_params_.limit_linear_at_angle_diff_to_setpoint
     );
   }
 

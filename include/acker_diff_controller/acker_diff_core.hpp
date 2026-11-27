@@ -54,7 +54,8 @@ struct SteeringParams
   double min_angle = 0;                // rad
   double max_angular_velocity = 0;     // rad/s
   double max_angular_acceleration = 0; // rad/s^2
-  double limit_linear_at_angle_diff_to_setpoint = 0;  // rad
+  // rad; stop linear motion while |setpoint - measured| exceeds it
+  double limit_linear_at_angle_diff_to_setpoint = 0;
 };
 
 struct WheelPair
@@ -157,7 +158,10 @@ public:
     AckerCommand limited_command;     // steering_angle_velocity holds the absolute authority
     double angular_correction = 0.0;  // steering loop output, rad/s
     bool steering_limit_reset = false;  // loop reset: it would steer further past a limit
-    bool linear_stopped = false;        // linear speed zeroed: steering error too large
+    double steering_error = 0.0;        // limited setpoint - measured angle, rad
+    // linear speed zeroed: |steering_error| > limit_linear_at_angle_diff_to_setpoint
+    // while the steering loop has authority
+    bool linear_stopped = false;
   };
 
   // Applies the configuration and resets all state.

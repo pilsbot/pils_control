@@ -117,27 +117,56 @@ TEST(AckerDiffCore, resets_loop_instead_of_steering_past_a_limit)
   EXPECT_EQ(out.angular_correction, 0.0);
 }
 
-TEST(AckerDiffCore, stops_linear_motion_when_correction_exceeds_gate)
+TEST(AckerDiffCore, stops_linear_motion_when_steering_error_exceeds_gate)
 {
   auto config = pilsbot_config();
-  // The output rate limit (max_dv 5 rad/s^2) allows 0.1 rad/s in the first step.
   config.steering.limit_linear_at_angle_diff_to_setpoint = 0.05;
   AckerDiffCore core;
   core.configure(config);
 
+  // Setpoint 0, measured 0.5: the steering error is 0.5 rad.
   const auto out = core.step(AckerCommand{1.0, 0.0, 1.0}, straight_at(0, 0, 0.5), kDt, 100.02);
   EXPECT_TRUE(out.linear_stopped);
   EXPECT_EQ(out.limited_command.speed, 0.0);
 }
 
-TEST(AckerDiffCore, robot_gate_cannot_trigger_with_current_robot_config)
+// pils_control#5: the gate compares the steering angle error (rad), not the
+// steering loop output (rad/s). The output is capped at max_angular_velocity
+// (1.0), so with the robot's gate of 1.2 rad the old check could never fire.
+TEST(AckerDiffCore, robot_gate_stops_linear_motion_on_large_steering_error)
 {
-  // Characterisation: the correction is capped at max_angular_velocity (1.0),
-  // which is below the configured gate (1.2), so linear motion is never stopped.
   AckerDiffCore core;
   core.configure(pilsbot_config());
+  // The angle limiter moves the setpoint to -0.02 rad; measured 1.4 rad: error 1.42 rad.
   const auto out = core.step(AckerCommand{1.0, -1.45, 5.0}, straight_at(0, 0, 1.4), kDt, 100.02);
+  EXPECT_TRUE(out.linear_stopped);
+  EXPECT_EQ(out.limited_command.speed, 0.0);
+  EXPECT_EQ(out.wheel_rates.left, -out.wheel_rates.right) << "steering on the spot only";
+}
+
+TEST(AckerDiffCore, small_steering_error_keeps_linear_motion_despite_large_correction)
+{
+  auto config = pilsbot_config();
+  config.steering.limit_linear_at_angle_diff_to_setpoint = 0.08;
+  AckerDiffCore core;
+  core.configure(config);
+
+  // Error 0.07 rad, below the gate; the correction (0.1 rad/s, max_dv-limited) is above it.
+  const auto out = core.step(AckerCommand{1.0, 0.0, 1.0}, straight_at(0, 0, 0.07), kDt, 100.02);
+  ASSERT_GT(std::abs(out.angular_correction), 0.08);
   EXPECT_FALSE(out.linear_stopped);
+  EXPECT_NEAR(out.limited_command.speed, 0.3 * kDt, 1e-12);
+}
+
+TEST(AckerDiffCore, passive_steering_never_stops_linear_motion)
+{
+  // Without authority (steering_angle_velocity 0) the setpoint is not tracked,
+  // so a large error is expected and must not stop the robot.
+  AckerDiffCore core;
+  core.configure(pilsbot_config());
+  const auto out = core.step(AckerCommand{1.0, 0.0, 0.0}, straight_at(0, 0, 1.4), kDt, 100.02);
+  EXPECT_FALSE(out.linear_stopped);
+  EXPECT_NEAR(out.limited_command.speed, 0.3 * kDt, 1e-12);
 }
 
 TEST(AckerDiffCore, invalid_steering_angle_stops_the_cycle)
